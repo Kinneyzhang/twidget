@@ -67,7 +67,7 @@
   "Delimiter between each choices.")
 
 (defvar twidget-components
-  '(twidget-choice)
+  '(twidget-choice twidget-text)
   "A list of all twidget components.")
 
 (defvar-local twidget-value nil
@@ -85,16 +85,60 @@
   "Judge if the twidget with id TWIDGET-ID is actived."
   (string= twidget-active-id twidget-id))
 
-;; twidget component function
+;;; twidget component functions
 
-;;; choice twidget
+;; text twidget
+
+(defun twidget-text (&rest args)
+  "Printer function for 'text' twidget with arguments ARGS."
+  (let* ((id (plist-get args :id))
+         (bind (plist-get args :bind))
+         (value (or (plist-get args :value) " "))
+         (val-len (length value))
+         (format (plist-get args :format))
+         twidget-beg twidget-end)
+    (if format
+        (progn
+          (setq twidget-beg (+ (point) (string-match "\\[t\\]" format)))
+          (setq twidget-end (+ twidget-beg val-len))
+          (insert (replace-regexp-in-string "\\[t\\]" value format t)))
+      (setq twidget-beg (point))
+      (setq twidget-end (+ val-len (point)))
+      (insert value))
+    ;; add face properties
+    (add-text-properties twidget-beg twidget-end
+                         `(twidget-id ,id face (:underline t)))
+    ;; add keyhint
+    (when (twidget-active-p id)
+      (let ((letter (buffer-substring-no-properties
+                     twidget-beg (1+ twidget-beg))))
+        (add-text-properties
+         twidget-beg twidget-end
+         `(display ,(concat (propertize "1" 'face 'twidget-key-hint-face)
+                            value)))))))
+
+(defun twidget-text-update-value (value)
+  "Update current active text twidget."
+  (twidget--correct-cursor)
+  (let* ((node (ewoc-locate twidget-ewoc))
+         (twidget (car twidget-data))
+         (plst (cdr twidget-data))
+         (bind (plist-get plst :bind))
+         (beg (point)))
+    (setq plst (plist-put plst :value value))
+    (ewoc-set-data node (cons twidget plst))
+    (ewoc-invalidate twidget-ewoc node)
+    (setq twidget-value value)
+    (set bind twidget-value)
+    (goto-char beg)))
+
+;; choice twidget
 
 (defun twidget-choice (&rest args)
-  "Printer function for 'single choice' twidget with arguments ARGS."
+  "Printer function for 'choice' twidget with arguments ARGS."
   (let* ((id (plist-get args :id))
          (value (plist-get args :value))
          (require (plist-get args :require))
-         (multiple (plist-get args :multiple))
          (choices (plist-get args :choices))
          (format (plist-get args :format))
          (twidget-str
@@ -161,13 +205,17 @@
          (multiple (plist-get plst :multiple))
          (require (plist-get plst :require))
          (value choice)
-         plst)
+         (beg (point)))
     ;; when 'multiple choices' twidget
     (when multiple
+      (unless (listp twidget-value)
+        (setq twidget-value (list twidget-value)))
       (if (member value twidget-value)
           (if require
               (if (= (length twidget-value) 1)
-                  (setq value (list value))
+                  (progn
+                    (setq value (list value))
+                    (message "At least one choice is required!"))
                 (setq value (seq-filter (lambda (el)
                                           (not (string= el value)))
                                         twidget-value)))
@@ -175,13 +223,14 @@
                                       (not (string= el value)))
                                     twidget-value)))
         (setq value (append twidget-value (list value)))))
-    (setq plst (plist-put (cdr data) :value value))
+    (setq plst (plist-put plst :value value))
     (ewoc-set-data node (cons twidget plst))
     (ewoc-invalidate twidget-ewoc node)
     (setq twidget-value value)
-    (set bind twidget-value)))
+    (set bind twidget-value)
+    (goto-char beg)))
 
-;; twidget ewoc
+;;; twidget ewoc
 
 (defun twidget-ewoc-pp (data)
   "Pretty printer for twidget ewoc."
@@ -191,6 +240,11 @@
      (let* ((twidget (car data))
             (plst (cdr data)))
        (pcase twidget
+         ('twidget-text
+          (let ((bind (plist-get plst :bind))
+                (value (plist-get plst :value)))
+            (apply #'twidget-text plst)
+            (set bind value)))
          ('twidget-choice
           (let ((bind (plist-get plst :bind))
                 (value (plist-get plst :value)))
@@ -200,12 +254,24 @@
 
 (defun twidget--before-setup ()
   "Some buffer settings for twidget."
-  (let ((ewoc (ewoc-create 'twidget-ewoc-pp nil nil)))
+  (let* ((info "Press <tab> to jump to next twidget,\
+ <shift-tab> to jump to previous one.")
+         (info-len (length info))
+         (ewoc (ewoc-create
+                'twidget-ewoc-pp
+                (propertize
+                 (concat
+                  ;; (make-string info-len ?=)
+                  ";; " info "\n"
+                  ;; (make-string info-len ?=)
+                  )
+                 'face '(italic shadow))
+                nil)))
     (kill-all-local-variables)
     (remove-overlays)
     (buffer-disable-undo)
     (read-only-mode -1)
-    ;; (setq cursor-type nil)
+    (setq cursor-type nil)
     (set (make-local-variable 'twidget-ewoc) ewoc)))
 
 (defun twidget--after-setup ()
@@ -214,39 +280,51 @@
   (when-let* ((match (text-property-search-forward 'twidget-id))
               (beg (prop-match-beginning match))
               (id (prop-match-value match))
-              (data (ewoc-data (ewoc-locate twidget-ewoc))))
-    (setq twidget-value (plist-get (cdr data) :value))
+              (data (ewoc-data (ewoc-locate twidget-ewoc)))
+              (value (plist-get (cdr data) :value)))
+    (setq twidget-value value)
     (setq twidget-active-id id)
-    (setq twidget-data (cdr data))
+    (setq twidget-data data)
     (ewoc-refresh twidget-ewoc)
     (goto-char beg)
-    (twidget-bind-key)
+    (twidget--bind-key)
     (twidget-mode 1)
     (read-only-mode 1)))
 
-(defun twidget-bind-key ()
+(defun twidget--bind-key ()
   "Bind the key of twidget."
-  (let* ((data twidget-data)
-         (require (plist-get data :require))
-         (multiple (plist-get data :multiple))
-         (bind (plist-get data :bind))
-         (choices (plist-get data :choices)))
-    (dotimes (i (length choices))
-      (define-key twidget-mode-map (kbd (number-to-string (1+ i)))
-        (lambda ()
-          (interactive)
-          ;; FIXME: simply following code and `twidget-choice-select'.
-          (if multiple
-              (twidget-choice-select (nth i choices))
-            (if require
-                (twidget-choice-select (nth i choices))
-              (if (string= (nth i choices) twidget-value)
-                  (twidget-choice-select nil)
-                (twidget-choice-select (nth i choices))))))))))
+  (let ((twidget (car twidget-data))
+        (plst (cdr twidget-data)))
+    (pcase twidget
+      ('twidget-text
+       (define-key twidget-mode-map (kbd "1")
+         (lambda ()
+           (interactive)
+           (setq twidget-value (read-from-minibuffer
+                                "Input the value: " twidget-value))
+           (twidget-text-update-value twidget-value))))
+      ('twidget-choice
+       (let ((require (plist-get plst :require))
+             (multiple (plist-get plst :multiple))
+             (choices (plist-get plst :choices)))
+         (dotimes (i (length choices))
+           (define-key twidget-mode-map (kbd (number-to-string (1+ i)))
+             (lambda ()
+               (interactive)
+               ;; FIXME: simply following code and `twidget-choice-select'.
+               (if multiple
+                   (twidget-choice-select (nth i choices))
+                 (if require
+                     (if (string= (nth i choices) twidget-value)
+                         (message "At least one choice is required!")
+                       (twidget-choice-select (nth i choices)))
+                   (if (string= (nth i choices) twidget-value)
+                       (twidget-choice-select nil)
+                     (twidget-choice-select (nth i choices)))))))))))))
 
-(defun twidget-unbind-key (data)
+(defun twidget--unbind-key (data)
   "Unbind the key of twidget with data DATA."
-  (let* ((choices (plist-get data :choices)))
+  (let* ((choices (plist-get (cdr data) :choices)))
     (dotimes (i (length choices))
       (unbind-key (kbd (number-to-string (1+ i))) twidget-mode-map))))
 
@@ -254,46 +332,62 @@
   "Move the cursor point to the beginning of active twidget."
   (unless (twidget-active-p (get-text-property (point) 'twidget-id))
     (goto-char (point-max))
-    (text-property-search-backward 'twidget-id twidget-active-id)))
+    (when-let* ((match (text-property-search-backward
+                        'twidget-id twidget-active-id t))
+                (beg (prop-match-beginning match)))
+      (goto-char beg))))
+
+(defun twidget--next-twidget ()
+  "Jump to the beginning of next twidget, 
+return a cons cell of position and twidget id."
+  (twidget--correct-cursor)
+  (let* ((pos (next-single-property-change (point) 'twidget-id))
+         (pos (next-single-property-change pos 'twidget-id)))
+    (when pos (goto-char pos))
+    (cons (get-text-property (point) 'twidget-id) (point))))
+
+(defun twidget--previous-twidget ()
+  "Jump to the beginning of previous twidget,
+return a cons cell of position and twidget id."
+  (twidget--correct-cursor)
+  (let* ((pos (previous-single-property-change (point) 'twidget-id))
+         (pos (when pos
+                (previous-single-property-change pos 'twidget-id))))
+    (when pos (goto-char pos))
+    (cons (get-text-property (point) 'twidget-id) (point))))
 
 ;;;###autoload
 (defun twidget-jump-forward ()
   "Jump to the next twidget and active it."
   (interactive)
   ;; unbind the key of last active twidget
-  (twidget-unbind-key twidget-data)
-  ;; when the cursor is at the active twidget, move cursor to it.
-  (twidget--correct-cursor)
-  (when-let* ((match (text-property-search-forward 'twidget-id nil nil t))
-              (beg (prop-match-beginning match))
-              (id (prop-match-value match))
-              (data (ewoc-data (ewoc-locate twidget-ewoc))))
+  (twidget--unbind-key twidget-data)
+  (let* ((id-beg (twidget--next-twidget))
+         (id (car id-beg))
+         (beg (cdr id-beg))
+         (data (ewoc-data (ewoc-locate twidget-ewoc))))
     (setq twidget-value (plist-get (cdr data) :value))
     (setq twidget-active-id id)
-    (setq twidget-data (cdr data))
+    (setq twidget-data data)
     (ewoc-refresh twidget-ewoc)
-    ;; bind the key of current active twidget
-    (twidget-bind-key)
-    (goto-char beg)))
+    (goto-char beg)
+    (twidget--bind-key)))
 
 ;;;###autoload
 (defun twidget-jump-backward ()
   "Jump to the previous twidget and active it."
   (interactive)
-  (twidget-unbind-key twidget-data)
-  ;; when the cursor is at the active twidget, move cursor to it.
-  (twidget--correct-cursor)
-  (when-let* ((match (text-property-search-backward 'twidget-id nil nil t))
-              (beg (prop-match-beginning match))
-              (id (prop-match-value match))
-              (data (ewoc-data (ewoc-locate twidget-ewoc))))
+  (twidget--unbind-key twidget-data)
+  (let* ((id-beg (twidget--previous-twidget))
+         (id (car id-beg))
+         (beg (cdr id-beg))
+         (data (ewoc-data (ewoc-locate twidget-ewoc))))
     (setq twidget-value (plist-get (cdr data) :value))
     (setq twidget-active-id id)
-    (setq twidget-data (cdr data))
+    (setq twidget-data data)
     (ewoc-refresh twidget-ewoc)
-    ;; bind the key of current active twidget
-    (twidget-bind-key)
-    (goto-char beg)))
+    (goto-char beg)
+    (twidget--bind-key)))
 
 ;;;###autoload
 (defun twidget-insert (&rest args)
@@ -303,11 +397,8 @@
     (pcase arg
       ((and (pred listp)
             (guard (member (car arg) twidget-components)))
-       ;; (apply #'twidget-create arg)
        (ewoc-enter-last twidget-ewoc (append arg `(:id ,(org-id-uuid)))))
-      (_
-       ;; (twidget-create arg)
-       (ewoc-enter-last twidget-ewoc arg))))
+      (_ (ewoc-enter-last twidget-ewoc arg))))
   (twidget--after-setup))
 
 ;;;###autoload
@@ -317,31 +408,40 @@
 
 ;;;; test example
 
-(defvar single-choice nil)
-(defvar single-choice2 nil)
+;; (defvar test-single-choice nil)
+;; (defvar test-multiple-choice nil)
+;; (defvar test-text nil)
 
-(progn
-  (pop-to-buffer (get-buffer-create "*test*"))
-  (let ((inhibit-read-only t))
-    (erase-buffer))
-  (twidget-insert
-   `(twidget-choice
-     :bind single-choice
-     :value "daily"
-     :multiple nil
-     :require nil
-     :format ,(concat (propertize "Repeat" 'face 'bold)
-                      " [t] frequency.")
-     :choices ,gtd-habit-regular-feq-type)
-   ""
-   `(twidget-choice
-     :bind single-choice2
-     :value ("Monday")
-     :multiple t
-     :require t
-     :format ,(concat (propertize "Choose a week: " 'face 'bold)
-                      "[t]")
-     :choices ,gtd-habit-frequency-by-day)))
+;; (progn
+;;   (pop-to-buffer (get-buffer-create "*test*"))
+;;   (let ((inhibit-read-only t))
+;;     (erase-buffer))
+;;   (twidget-insert
+;;    `(twidget-choice
+;;      :bind test-single-choice
+;;      :value "daily"
+;;      :require t
+;;      :format ,(concat (propertize "Repeat" 'face 'bold)
+;;                       " [t] frequency.\n")
+;;      :choices ,gtd-habit-regular-feq-type)
+;;    `(twidget-choice
+;;      :bind test-multiple-choice
+;;      :multiple t
+;;      :require nil
+;;      :choices ,gtd-habit-frequency-by-day)
+;;    `(twidget-text
+;;      :bind test-text
+;;      :value "default"
+;;      :format "\nWhat's your name: [t]\n"
+;;      )
+;;    `(twidget-choice
+;;      :bind test-multiple-choice
+;;      :value ("Monday")
+;;      :multiple t
+;;      :require t
+;;      :format ,(concat (propertize "Choose a week: " 'face 'bold)
+;;                       "[t]")
+;;      :choices ,gtd-habit-frequency-by-day)))
 
 (provide 'twidget)
 ;;; twidget.el ends here
