@@ -1,1 +1,3 @@
-** twidget
+** twidget gif demo
+   [[./demo.gif]]
+    

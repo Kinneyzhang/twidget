@@ -4,7 +4,7 @@
 ;;
 ;; Version: 0.0.1
 ;; Keywords: widget convenience
-;; Author: Kinney Zhang <kinneyzhang666 AT gmail DOT com>
+;; Author: Kinney Zhang <kinneyzhang666@gmail.com>
 ;; URL: https://github.com/Kinneyzhang/twidget
 ;; Package-Requires: ((emacs "24.4"))
 
@@ -408,40 +408,31 @@ return a cons cell of position and twidget id."
 
 ;;;; test example
 
-;; (defvar test-single-choice nil)
-;; (defvar test-multiple-choice nil)
-;; (defvar test-text nil)
-
-;; (progn
-;;   (pop-to-buffer (get-buffer-create "*test*"))
-;;   (let ((inhibit-read-only t))
-;;     (erase-buffer))
-;;   (twidget-insert
-;;    `(twidget-choice
-;;      :bind test-single-choice
-;;      :value "daily"
-;;      :require t
-;;      :format ,(concat (propertize "Repeat" 'face 'bold)
-;;                       " [t] frequency.\n")
-;;      :choices ,gtd-habit-regular-feq-type)
-;;    `(twidget-choice
-;;      :bind test-multiple-choice
-;;      :multiple t
-;;      :require nil
-;;      :choices ,gtd-habit-frequency-by-day)
-;;    `(twidget-text
-;;      :bind test-text
-;;      :value "default"
-;;      :format "\nWhat's your name: [t]\n"
-;;      )
-;;    `(twidget-choice
-;;      :bind test-multiple-choice
-;;      :value ("Monday")
-;;      :multiple t
-;;      :require t
-;;      :format ,(concat (propertize "Choose a week: " 'face 'bold)
-;;                       "[t]")
-;;      :choices ,gtd-habit-frequency-by-day)))
+(defvar test-single-choice nil)
+(defvar test-multiple-choice nil)
+(defvar test-text nil)
+(progn
+  (display-buffer-in-side-window (get-buffer-create "*twidget test*") nil)
+  (select-window (get-buffer-window "*twidget test*"))
+  (let ((inhibit-read-only t))
+    (erase-buffer))
+  (twidget-insert
+   `(twidget-choice
+     :bind test-single-choice ;; the value is binded to this variable!
+     :value "after-completion"
+     :require t
+     :format ,(concat (propertize "Single Choice: " 'face 'bold) " [t] frequency.\n")
+     :choices ,gtd-habit-regular-feq-type)
+   `(twidget-text
+     :bind test-text ;; the value is binded to this variable!
+     :value "default"
+     :format ,(concat (propertize "What's your name: " 'face 'bold) "[t]\n"))
+   `(twidget-choice
+     :bind test-multiple-choice ;; the value is binded to this variable!
+     :multiple t
+     :require nil
+     :format ,(concat (propertize "Multiple Choice: " 'face 'bold) "[t]")
+     :choices ,gtd-habit-frequency-by-day)))
 
 (provide 'twidget)
 ;;; twidget.el ends here
