@@ -67,7 +67,7 @@
   "Delimiter between each choices.")
 
 (defvar twidget-components
-  '(twidget-single-choice)
+  '(twidget-choice)
   "A list of all twidget components.")
 
 (defvar-local twidget-value nil
@@ -87,83 +87,99 @@
 
 ;; twidget component function
 
-;;; single-choice
+;;; choice twidget
 
-(defun twidget-single-choice (&rest args)
-  "Printer function for 'single choice' twidget."
+(defun twidget-choice (&rest args)
+  "Printer function for 'single choice' twidget with arguments ARGS."
   (let* ((id (plist-get args :id))
          (value (plist-get args :value))
          (require (plist-get args :require))
+         (multiple (plist-get args :multiple))
          (choices (plist-get args :choices))
          (format (plist-get args :format))
          (twidget-str
           (propertize (string-join choices twidget-choice-delimiter)
                       'twidget-id id))
-         line-beg line-end twidget-beg twidget-end)
+         (twidget-len (length twidget-str))
+         line-beg twidget-beg twidget-end)
+    ;; insert the whole twidget-str
     (if format
-        (progn
-          (setq line-beg (point))
-          (insert (replace-regexp-in-string "\\[t\\]" twidget-str format t))
-          (setq line-end (point))
-          (when (string-match "\\[t\\]" format)
-            (let* ((beg (match-beginning 0))
-                   (end (match-end 0))
-                   (rest-len (- (length format) end)))
-              (setq twidget-beg (+ line-beg beg))
-              (setq twidget-end (- line-end rest-len)))))
+        (if-let ((start (string-match "\\[t\\]" format)))
+            (progn
+              (setq twidget-beg (+ (point) start))
+              (setq twidget-end (+ twidget-beg twidget-len))
+              (insert (replace-regexp-in-string "\\[t\\]" twidget-str format t)))
+          (error "Invalid value of :format, it should includes '[t]'!"))
       (setq twidget-beg (point))
-      (insert twidget-str)
-      (setq twidget-end (point))
-      (setq line-end twidget-end))
+      (setq twidget-end (+ twidget-beg twidget-len))
+      (insert twidget-str))
+    ;; add face properties
     (when value
+      (add-face-text-property twidget-beg twidget-end
+                              'twidget-choice-rest-face)
+      (pcase value
+        ((pred listp)
+         (dolist (val value)
+           (let* ((start (string-match val twidget-str))
+                  (val-len (length val))
+                  (val-beg (+ twidget-beg start))
+                  (val-end (+ val-beg val-len)))
+             (put-text-property val-beg val-end
+                                'face 'twidget-choice-selected-face))))
+        ((pred stringp)
+         (save-excursion
+           (goto-char twidget-beg)
+           (when (search-forward value nil twidget-end)
+             (put-text-property (match-beginning 0) (match-end 0)
+                                'face 'twidget-choice-selected-face))))))
+    ;; add keyhint
+    (when (twidget-active-p id)
       (save-excursion
         (goto-char twidget-beg)
-        (when (search-forward value nil t)
-          (let ((beg (match-beginning 0))
-                (end (match-end 0)))
-            (add-face-text-property
-             beg end 'twidget-choice-selected-face)
-            (pcase nil
-              ((guard (= beg twidget-beg))
-               (add-face-text-property
-                end twidget-end 'twidget-choice-rest-face))
-              ((guard (= end twidget-end))
-               (add-face-text-property
-                twidget-beg beg 'twidget-choice-rest-face))
-              (_ (add-face-text-property
-                  twidget-beg beg 'twidget-choice-rest-face)
-                 (add-face-text-property
-                  end twidget-end 'twidget-choice-rest-face)))))))
-    (when (twidget-active-p id)
-      (goto-char twidget-beg)
-      (dotimes (i (length choices))
-        (let ((choice (nth i choices)))
-          (when (search-forward choice nil t)
-            (let* ((beg (match-beginning 0))
-                   (letter (buffer-substring-no-properties beg (1+ beg))))
-              (add-text-properties
-               beg (1+ beg)
-               `(display ,(concat (propertize (number-to-string (1+ i))
-                                              'face 'twidget-key-hint-face)
-                                  letter))))))))
-    (goto-char line-end)))
+        (dotimes (i (length choices))
+          (let ((choice (nth i choices)))
+            (when (search-forward choice nil t)
+              (let* ((beg (match-beginning 0))
+                     (letter (buffer-substring-no-properties beg (1+ beg))))
+                (add-text-properties
+                 beg (1+ beg)
+                 `(display ,(concat (propertize (number-to-string (1+ i))
+                                                'face 'twidget-key-hint-face)
+                                    letter)))))))))))
 
+;; try to put it in :action parameter
 ;;;###autoload
-(defun twidget-single-choice-switch (choice)
-  "Set the value of 'single choice' twidget to CHOICE."
+(defun twidget-choice-select (choice)
+  "Select the choice CHOICE."
   (interactive)
   (twidget--correct-cursor)
   (let* ((node (ewoc-locate twidget-ewoc))
          (data (ewoc-data node))
          (twidget (car data))
-         (plst (plist-put (cdr data) :value choice))
-         (new-data (cons twidget plst)))
-    (ewoc-set-data node new-data)
+         (plst (cdr data))
+         (bind (plist-get plst :bind))
+         (multiple (plist-get plst :multiple))
+         (require (plist-get plst :require))
+         (value choice)
+         plst)
+    ;; when 'multiple choices' twidget
+    (when multiple
+      (if (member value twidget-value)
+          (if require
+              (if (= (length twidget-value) 1)
+                  (setq value (list value))
+                (setq value (seq-filter (lambda (el)
+                                          (not (string= el value)))
+                                        twidget-value)))
+            (setq value (seq-filter (lambda (el)
+                                      (not (string= el value)))
+                                    twidget-value)))
+        (setq value (append twidget-value (list value)))))
+    (setq plst (plist-put (cdr data) :value value))
+    (ewoc-set-data node (cons twidget plst))
     (ewoc-invalidate twidget-ewoc node)
-    (setq twidget-value choice)))
-
-;;; multi-choices
-
+    (setq twidget-value value)
+    (set bind twidget-value)))
 
 ;; twidget ewoc
 
@@ -175,10 +191,10 @@
      (let* ((twidget (car data))
             (plst (cdr data)))
        (pcase twidget
-         ('twidget-single-choice
+         ('twidget-choice
           (let ((bind (plist-get plst :bind))
                 (value (plist-get plst :value)))
-            (apply #'twidget-single-choice plst)
+            (apply #'twidget-choice plst)
             (set bind value))))))
     (_ (insert data))))
 
@@ -212,22 +228,21 @@
   "Bind the key of twidget."
   (let* ((data twidget-data)
          (require (plist-get data :require))
+         (multiple (plist-get data :multiple))
          (bind (plist-get data :bind))
          (choices (plist-get data :choices)))
     (dotimes (i (length choices))
       (define-key twidget-mode-map (kbd (number-to-string (1+ i)))
         (lambda ()
           (interactive)
-          (if require
-              (progn
-                (set bind twidget-value)
-                (twidget-single-choice-switch (nth i choices)))
-            (if (string= (nth i choices) twidget-value)
-                (progn
-                  (set bind nil)
-                  (twidget-single-choice-switch nil))
-              (set bind twidget-value)
-              (twidget-single-choice-switch (nth i choices)))))))))
+          ;; FIXME: simply following code and `twidget-choice-select'.
+          (if multiple
+              (twidget-choice-select (nth i choices))
+            (if require
+                (twidget-choice-select (nth i choices))
+              (if (string= (nth i choices) twidget-value)
+                  (twidget-choice-select nil)
+                (twidget-choice-select (nth i choices))))))))))
 
 (defun twidget-unbind-key (data)
   "Unbind the key of twidget with data DATA."
@@ -310,28 +325,23 @@
   (let ((inhibit-read-only t))
     (erase-buffer))
   (twidget-insert
-   `(twidget-single-choice
+   `(twidget-choice
      :bind single-choice
-     :require t
      :value "daily"
+     :multiple nil
+     :require nil
      :format ,(concat (propertize "Repeat" 'face 'bold)
                       " [t] frequency.")
      :choices ,gtd-habit-regular-feq-type)
    ""
-   `(twidget-single-choice
+   `(twidget-choice
      :bind single-choice2
-     :require nil
+     :value ("Monday")
+     :multiple t
+     :require t
      :format ,(concat (propertize "Choose a week: " 'face 'bold)
                       "[t]")
-     :value "Monday"
      :choices ,gtd-habit-frequency-by-day)))
-
-;; (defun twidget-create (&rest twidget)
-;;   (pcase twidget
-;;     ((and (pred listp)
-;;           (guard (member (car twidget) twidget-components)))
-;;      (ewoc-enter-last twidget-ewoc (append twidget `(:id ,(org-id-uuid)))))
-;;     (_ (ewoc-enter-last twidget-ewoc (car twidget)))))
 
 (provide 'twidget)
 ;;; twidget.el ends here
