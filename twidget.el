@@ -32,6 +32,7 @@
 
 ;;;; Requires
 
+(require 'ov)
 (require 'ewoc)
 (require 'org-id)
 
@@ -73,7 +74,7 @@
 (defvar-local twidget-value nil
   "The value of current active twidget.")
 
-(defvar-local twidget-active-id ""
+(defvar-local twidget-active-id "0"
   "The id of current active twidget.")
 
 (defvar-local twidget-active-data nil
@@ -89,6 +90,9 @@
 
 (defvar twidget-margin 2
   "Left margin of twidget buffer.")
+
+(defvar-local twidget-overlays nil
+  "List of overlays in twidget buffer.")
 
 ;;;; Functions
 
@@ -112,17 +116,42 @@ PROP2 whose value is VALUE1."
 
 (defun twidget-active-p (twidget-id)
   "Judge if the twidget with id TWIDGET-ID is actived."
-  (string= twidget-active-id twidget-id))
+  (when (stringp twidget-id)
+    (string= twidget-active-id twidget-id)))
 
 (defun twidget-ewoc-refresh (ewoc)
   "Add left margin to buffer when refresh ewoc."
+  ;; (mapcar #'delete-overlay twidget-overlays)
+  (ov-reset twidget-overlays)
+  (setq twidget-overlays nil)
   (ewoc-refresh ewoc)
   (set-window-margins (selected-window) 2))
 
 (defun twidget-ewoc-invalidate (ewoc &rest nodes)
   "Add left margin to buffer when refresh nodes."
-  (apply #'ewoc-invalidate ewoc nodes)
-  (set-window-margins (selected-window) 2))
+  (let ((ids (mapcar (lambda (node)
+                       (plist-get (cdr (ewoc-data node)) :id))
+                     nodes)))
+    (dolist (id ids)
+      (ov-clear 'twidget-id id)
+      (setq twidget-overlays
+            (seq-filter
+             (lambda (ol)
+               (not (equal (seq-elt twidget-overlays (string-to-number id)) ol)))
+             twidget-overlays)))
+    (apply #'ewoc-invalidate ewoc nodes)
+    (set-window-margins (selected-window) 2)))
+
+(defun twidget-overlay (beg end &rest overlays)
+  "Make overlay on BEG and END in buffer with PROPERTIES.
+Remaining arguments form a sequence of NAME VALUE pairs."
+  ;; When refresh an ewoc node, it will delete the node and insert again.
+  ;; So, the front-advance argument in ov-make should be non-nil, for sake
+  ;; of not being including in the following overlay!
+  (let ((ol (ov-make beg end (current-buffer) t)))
+    (while overlays
+      (ov-set ol (pop overlays) (pop overlays))
+      (push ol twidget-overlays))))
 
 ;;; twidget component functions
 
@@ -148,12 +177,13 @@ PROP2 whose value is VALUE1."
       ;; leave one blank after each twidget
       ;; for sake of jumping back correctly
       (insert value " "))
+    ;; add twidget-id overlay
+    (twidget-overlay twidget-beg twidget-end 'twidget-id id)
     ;; add face properties
     (with-silent-modifications
       (add-text-properties twidget-beg twidget-end
-                           `(twidget-id ,id face
-                                        (twidget-choice-selected-face
-                                         :background "#eee"))))
+                           `(face (twidget-choice-selected-face
+                                   :background "#eee"))))
     ;; add keyhint
     (when (twidget-active-p id)
       (let ((letter (buffer-substring-no-properties
@@ -179,7 +209,9 @@ PROP2 whose value is VALUE1."
          (beg (point)))
     (setq plst (plist-put plst :value value))
     (ewoc-set-data node (cons twidget plst))
+    (message "ov-at-before:%S" (ov-at))
     (twidget-ewoc-invalidate twidget-ewoc node)
+    (message "ov-at-after:%S" (ov-at))
     (setq twidget-value value)
     (set bind twidget-value)
     (when action
@@ -198,7 +230,6 @@ PROP2 whose value is VALUE1."
          (format (plist-get args :format))
          (twidget-str (string-join choices (or separator
                                                twidget-choice-separator)))
-         (twidget-str (propertize twidget-str 'twidget-id id))
          (twidget-len (length twidget-str))
          line-beg twidget-beg twidget-end)
     ;; insert the whole twidget-str
@@ -216,6 +247,8 @@ PROP2 whose value is VALUE1."
       ;; leave one blank after each twidget
       ;; for sake of jumping back correctly
       (insert twidget-str " "))
+    ;; add twidget-id overlay
+    (twidget-overlay twidget-beg twidget-end 'twidget-id id)
     ;; add face properties
     (when value
       (with-silent-modifications
@@ -348,24 +381,15 @@ PROP2 whose value is VALUE1."
 
 (defun twidget--after-setup ()
   "Setting keyhint of the first twidget, binding keys and so on."
-  (goto-char (point-min))
-  (when-let* ((match (text-property-search-forward 'twidget-id))
-              (beg (prop-match-beginning match))
-              (id (prop-match-value match)))
-    (goto-char beg)
-    (let* ((node (ewoc-locate twidget-ewoc beg))
-           (data (ewoc-data node))
-           (value (plist-get (cdr data) :value)))
-      (setq twidget-active-id id)
-      (setq twidget-value value)
-      (setq twidget-active-data data)
-      ;; save all twidget data in `twidget-data' variable.
-      (setq twidget-data (twidget--update-twidget-data))
-      (twidget--bind-key)
-      (twidget-ewoc-invalidate twidget-ewoc node)
-      (twidget-mode 1)
-      (read-only-mode 1)
-      (goto-char beg))))
+  (when-let* ((ov (car (last twidget-overlays)))
+              (beg (ov-beg ov)))
+    (set-window-margins (selected-window) 2)
+    ;; save all twidget data in `twidget-data' variable.
+    (setq twidget-data (twidget--update-twidget-data))
+    (twidget--bind-key)
+    (twidget-mode 1)
+    (read-only-mode 1)
+    (goto-char beg)))
 
 (defun twidget--bind-key ()
   "Bind the key of twidget."
@@ -406,57 +430,28 @@ PROP2 whose value is VALUE1."
 
 (defun twidget--correct-cursor ()
   "Move the cursor point to the beginning of active twidget."
-  (unless (twidget-active-p (get-text-property (point) 'twidget-id))
-    (goto-char (point-max))
-    ;; FIXME: cannot search twidget-id properly
-    ;; when the the widget has one letter only.
-    ;; Maybe it's a bug of text-properties code?
-    (when-let* ((match (text-property-search-backward
-                        'twidget-id twidget-active-id t))
-                (beg (prop-match-beginning match)))
-      (goto-char beg))))
+  (let* ((ol (ov-at))
+         (active-p (when ol
+                     (twidget-active-p (ov-val ol 'twidget-id)))))
+    (unless active-p
+      (when-let ((ov (car (ov-in 'twidget-id twidget-active-id))))
+        (goto-char (ov-beg ov))))))
 
 (defun twidget--next-twidget ()
   "Jump to the beginning of next twidget, 
 return a cons cell of position and twidget id."
   (twidget--correct-cursor)
-  
-  ;; (let* ((pos (next-single-property-change (point) 'twidget-id))
-  ;;        (pos (when pos (next-single-property-change pos 'twidget-id))))
-  ;;   (when pos (goto-char pos))
-  ;;   (cons (get-text-property (point) 'twidget-id) (point)))
-  
-  (when-let* ((match (text-property-search-forward 'twidget-id nil nil t))
-              ;; because the cursor is at the beginning of prop match,
-              ;; it should skip current match when search forward.
-              (beg (prop-match-beginning match))
-              (id (prop-match-value match)))
-    (goto-char beg)
-    (cons id beg)))
+  (when-let ((ol (ov-next 'twidget-id)))
+    (goto-char (ov-beg ol))
+    (cons (ov-val ol 'twidget-id) (point))))
 
 (defun twidget--previous-twidget ()
   "Jump to the beginning of previous twidget,
 return a cons cell of position and twidget id."
   (twidget--correct-cursor)
-  ;; problem of the following method:
-  ;; cannot distinguish different twidget-id when twidget is not continuous.
-  
-  ;; (when-let* ((match (text-property-search-backward 'twidget-id))
-  ;;             ;; because the cursor is at the beginning of prop match,
-  ;;             ;; it should not skip next match when search backward.
-  ;;             (beg (prop-match-beginning match))
-  ;;             (id (prop-match-value match)))
-  ;;   (goto-char beg)
-  ;;   (cons id beg))
-  
-  ;; problem of the following method:
-  ;; cannot distinguish different twidget-id when twidget is continuous.
-  ;; so I choose to add one space between each twidget.
-  
-  (let* ((pos (previous-single-property-change (point) 'twidget-id))
-         (pos (when pos (previous-single-property-change pos 'twidget-id))))
-    (when pos (goto-char pos))
-    (cons (get-text-property (point) 'twidget-id) (point))))
+  (when-let ((ol (ov-prev 'twidget-id)))
+    (goto-char (ov-beg ol))
+    (cons (ov-val ol 'twidget-id) (point))))
 
 ;;;###autoload
 (defun twidget-jump-forward ()
@@ -497,6 +492,8 @@ return a cons cell of position and twidget id."
 ;;   "Return the list of data of all ewoc nodes."
 ;;   (ewoc-collect twidget-ewoc (lambda (data) (listp data))))
 
+(defvar-local twidget-num 0)
+
 ;;;###autoload
 (defun twidget-create (&rest args)
   "Insert a twidget at point. The car of twidget is the
@@ -504,8 +501,9 @@ twidget name and the rests are a series of attributes.
 
 Defaultly, insert a blank after twidget is inserted, for
 sake of jumping backward twidgets correctly."
-  (when (member (car args) twidget-components)    
-    (ewoc-enter-last twidget-ewoc (append args `(:id ,(org-id-uuid))))))
+  (when (member (car args) twidget-components)
+    (ewoc-enter-last twidget-ewoc (append args `(:id ,(number-to-string twidget-num))))
+    (incf twidget-num)))
 
 ;;;###autoload
 (defun twidget-insert (&rest args)
@@ -518,34 +516,24 @@ sake of jumping backward twidgets correctly."
   "Minor mode for text widget."
   nil nil nil)
 
-;; (defun twidget-update-node (node prop value)
-;;   "Update the PROP of the ewoc NODE to VALUE."
-;;   (let* ((data (ewoc-data node))
-;;          (twidget (car data))
-;;          (plst (plist-put (cdr data) prop value)))
-;;     (cons twidget plst)))
+;; update twidget node.
 
 (defun twidget--binded-node (bind)
   "Return the ewoc node of twidget binded with variable BIND."
-  (let ((id (twidget--prop-value :bind bind twidget-data :id)))
-    (save-excursion
-      (goto-char (1- (point-max)))
-      (if (text-property-search-backward 'twidget-id id t)
-          ;; FIXME: cannot search correctly when the text has only one letter.
-          (ewoc-locate twidget-ewoc)
-        (error "twidget with id %s searched failed!" id)))))
+  (let* ((id (twidget--prop-value :bind bind twidget-data :id))
+         (ovs (ov-in 'twidget-id id)))
+    ;; (message "id:%s" id)
+    ;; (message "ovs:%S" ovs)
+    (if ovs
+        (ewoc-locate twidget-ewoc (ov-beg (car ovs)))
+      (error "twidget with id %s searched failed!" id))))
 
-;; (defun twidget--multiple-nodes (binds)
-;;   "Return a list of ewoc nodes of twidget binded with variable list BINDS."
-;;   (mapcar #'twidget--single-node binds))
-
-(defun twidget--update-data (node prop value)
-  "Update the value of PROP property in NODE to VALUE."
-  (let* ((data (ewoc-data node))
-         (twidget (car data))
-         (plst (plist-put (cdr data) prop value)))
-    ;; (message "twidget:%S" twidget)
-    (ewoc-set-data node (cons twidget plst))))
+;; (defun twidget--update-data (node prop value)
+;;   "Update the value of PROP property in NODE to VALUE."
+;;   (let* ((data (ewoc-data node))
+;;          (twidget (car data))
+;;          (plst (plist-put (cdr data) prop value)))
+;;     (ewoc-set-data node (cons twidget plst))))
 
 (defun twidget--update-twidget (node properties)
   "Update the ewoc node NODE with twidget.
@@ -556,8 +544,9 @@ PROPERTIES is a sequence of PROPERTY VALUE pairs."
          (alist (twidget--plist->clist properties)))
     (dolist (item alist)
       (setq plst (plist-put plst (car item) (cdr item))))
+    (message "updated-note:%S" (cons twidget plst))
     (ewoc-set-data node (cons twidget plst))
-    (ewoc-invalidate twidget-ewoc node)
+    (twidget-ewoc-invalidate twidget-ewoc node)
     (setq twidget-data (twidget--update-twidget-data))))
 
 ;;;###autoload
@@ -573,6 +562,16 @@ properties to update on the node."
     (dolist (item clist)
       (apply #'twidget-update (car item) (cdr item)))))
 
+;;;###autoload
+(defun twidget-delete (bind)
+  "Delete the twidget node binded with variable BIND."
+  (let ((inhibit-read-only t))
+    (ewoc-delete twidget-ewoc (twidget--binded-node bind))))
+
+;;;###autoload
+(defun twidget-delete-multiple (binds)
+  (mapcar #'twidget-delete binds))
+
 ;;;; test example
 
 
@@ -580,7 +579,7 @@ properties to update on the node."
 ;;  'gtd-habit-freq-type '(:value "weekly" :separator nil)
 ;;  'gtd-habit-freq-arg1 '(:format "Every [t] day" :value "520")
 ;;  'gtd-habit-freq-arg2 '(:format "Next date: [t]")
-;;  'gtd-habit-freq-arg3 '(:separator " | " :value "on date"))
+;;  'gtd-habit-end-type '(:separator " | " :value "on date"))
 
 
 (defvar-local gtd-habit-freq-type nil)
@@ -591,27 +590,29 @@ properties to update on the node."
 (defvar gtd-habit-time-range '("day" "week" "month" "year"))
 (defvar gtd-habit-end-types '("never" "after" "on date"))
 
+(defun gtd-habit-update-choices (value)
+  (if (> (string-to-number value) 1)
+      (twidget-update 'gtd-habit-freq-arg2
+                      :choices
+                      (mapcar (lambda (el)
+                                (concat el "s"))
+                              gtd-habit-time-range)
+                      :value
+                      (if (string= "s" (substring gtd-habit-freq-arg2 -1))
+                          gtd-habit-freq-arg2
+                        (concat gtd-habit-freq-arg2 "s")))
+    (twidget-update 'gtd-habit-freq-arg2
+                    :choices gtd-habit-time-range
+                    :value
+                    (if (string= "s" (substring gtd-habit-freq-arg2 -1))
+                        (string-trim-right gtd-habit-freq-arg2 "s")
+                      gtd-habit-freq-arg2))))
+
 (defun gtd-habit-repeat-after-completion-twidgets ()
   (twidget-create 'twidget-text
                   :bind 'gtd-habit-freq-arg1
                   :value "1"
-                  :action (lambda (value)
-                            (if (> (string-to-number value) 1)
-                                (twidget-update 'gtd-habit-freq-arg2
-                                                :choices
-                                                (mapcar (lambda (el)
-                                                          (concat el "s"))
-                                                        gtd-habit-time-range)
-                                                :value
-                                                (if (string= "s" (substring gtd-habit-freq-arg2 -1))
-                                                    gtd-habit-freq-arg2
-                                                  (concat gtd-habit-freq-arg2 "s")))
-                              (twidget-update 'gtd-habit-freq-arg2
-                                              :choices gtd-habit-time-range
-                                              :value
-                                              (if (string= "s" (substring gtd-habit-freq-arg2 -1))
-                                                  (string-trim-right gtd-habit-freq-arg2 "s")
-                                                gtd-habit-freq-arg2)))))
+                  :action 'gtd-habit-update-choices)
   (twidget-create 'twidget-choice
                   :bind 'gtd-habit-freq-arg2
                   :choices gtd-habit-time-range
@@ -620,31 +621,67 @@ properties to update on the node."
                   :separator "/"
                   :require t))
 
+(defmacro twidget-group (bind &rest body)
+  ;; List all binded variable of twidgets in body to BIND, leave body.
+  (let ((binds (mapcar (lambda (el)
+                         (plist-get (cddr el) :bind))
+                       (seq-filter (lambda (el)
+                                     (eq (car el) 'twidget-create))
+                                   body))))
+    (message "binds:%S" binds)
+    `(progn
+       (set (make-local-variable ,bind) (list ,@binds))
+       ,@body)))
+
 (defun gtd-habit-repeat-daily-twidgets ()
-  (twidget-create 'twidget-text
-                  :bind 'gtd-habit-freq-arg1
-                  :format "Every [t] days"
-                  :action (lambda (value)
-                            (if (> (string-to-number value) 1)
-                                (twidget-update 'gtd-habit-freq-arg1
-                                                :format "Every [t] days")
-                              (twidget-update 'gtd-habit-freq-arg1
-                                              :format "Every [t] day")))
-                  :value "22")
-  (twidget-insert "\n\n")
-  (twidget-create 'twidget-text
-                  :bind 'gtd-habit-freq-arg2
-                  :format "Next: [t]"
-                  :value "2021/ 4/21"))
+  (twidget-group
+   'twidget-group1
+   (twidget-create 'twidget-text
+                   :bind 'gtd-habit-freq-arg1
+                   :format "Every [t] day"
+                   :action (lambda (value)
+                             (if (> (string-to-number value) 1)
+                                 (twidget-update 'gtd-habit-freq-arg1
+                                                 :format "Every [t] days")
+                               (twidget-update 'gtd-habit-freq-arg1
+                                               :format "Every [t] day")))
+                   :value "1")
+   (twidget-insert "\n\n")
+   (twidget-create 'twidget-text
+                   :bind 'gtd-habit-freq-arg2
+                   :format "Next: [t]"
+                   :value "2021/ 4/21")
+   (twidget-insert "\n")
+   (twidget-create 'twidget-choice
+                   :bind 'gtd-habit-end-type
+                   :choices gtd-habit-end-types
+                   :format "Ends: [t]"
+                   :value "never"
+                   :separator "/"
+                   :require t)))
 
 (defvar-local gtd-habit-end-type nil)
+
+;;; TODO: when ewoc-delete, delete the related overlays.
+
+(defun gtd-habit-freq-type-switch (value)
+  (pcase gtd-habit-freq-type
+    ("after-completion"
+     (twidget-delete-multiple twidget-group1)
+     (gtd-habit-repeat-after-completion-twidgets))
+    (_
+     (twidget-delete-multiple '(gtd-habit-freq-arg1 gtd-habit-freq-arg2))
+     (pcase gtd-habit-freq-type
+       ("daily" (gtd-habit-repeat-daily-twidgets))
+       ("weekly" (gtd-habit-repeat-weekly-twidgets))
+       ("monthly" (gtd-habit-repeat-monthly-twidgets))
+       ("yearly" (gtd-habit-repeat-yearly-twidgets))))))
 
 (progn
   ;; (display-buffer-in-side-window (get-buffer-create "*twidget test*") nil)
   (pop-to-buffer (get-buffer-create "*twidget test*"))
   ;; (select-window (get-buffer-window "*twidget test*"))
-  (let ((inhibit-read-only t)
-        node1 node2 node3 node4)
+  (let ((inhibit-read-only t))
     (erase-buffer))
   ;;; Next Todo:
   ;; write a macro to include `twidget--before-setup' and `twidget--after-setup' codes.
@@ -655,30 +692,17 @@ properties to update on the node."
   (twidget-create 'twidget-choice
                   :bind 'gtd-habit-freq-type
                   :choices gtd-habit-regular-feq-type
+                  :action 'gtd-habit-freq-type-switch
                   :format "Repeat [t]"
-                  :value "daily"
+                  :value "after-completion"
                   :separator "/"
                   :require t)
   (twidget-insert "\n\n")
-  (pcase gtd-habit-freq-type
-    ("after-completion"
-     (gtd-habit-repeat-after-completion-twidgets))
-    (_ (pcase gtd-habit-freq-type
-         ("daily" (gtd-habit-repeat-daily-twidgets))
-         ("weekly" (gtd-habit-repeat-weekly-twidgets))
-         ("monthly" (gtd-habit-repeat-monthly-twidgets))
-         ("yearly" (gtd-habit-repeat-yearly-twidgets)))
-       (twidget-insert "\n")
-       (twidget-create 'twidget-choice
-                       :bind 'gtd-habit-end-type
-                       :choices gtd-habit-end-types
-                       :format "Ends: [t]"
-                       :value "never"
-                       :separator "/"
-                       :require t)))
+  (gtd-habit-repeat-after-completion-twidgets)
   (twidget--after-setup))
 
 (provide 'twidget)
 ;;; twidget.el ends here
 
 ;; use overlay to store twidget-id!
+;; avoid adding overlay every time when refresh ewoc nodes!
