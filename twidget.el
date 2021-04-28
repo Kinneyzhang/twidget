@@ -57,12 +57,10 @@
 (defvar twidget-ewoc nil
   "EWOC for twidget.")
 
-(defvar twidget-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "<tab>") #'twidget-jump-forward)
-    (define-key map (kbd "<backtab>") #'twidget-jump-backward)
-    map)
-  "Keymap for `twidget-mode'.")
+;; (defvar-local twidget-mode-map
+;;   "Keymap for `twidget-mode'.")
+
+(defvar twidget-mode-map nil)
 
 (defvar twidget-choice-separator " "
   "Separator between each choices.")
@@ -76,10 +74,13 @@
   '(twidget-choice twidget-text)
   "A list of all twidget components.")
 
+(defvar-local twidget-start-pos nil
+  "The start position of all twidget contents in buffer.")
+
 (defvar-local twidget-value nil
   "The value of current active twidget.")
 
-(defvar-local twidget-active-id "0"
+(defvar-local twidget-active-id nil
   "The id of current active twidget.")
 
 (defvar-local twidget-active-data nil
@@ -386,6 +387,30 @@ Remaining arguments form a sequence of NAME VALUE pairs."
     (setq cursor-type t)
     (set (make-local-variable 'twidget-ewoc) ewoc)))
 
+(defun twidget--after-setup ()
+  "Setting keyhint of the first twidget, binding keys and so on."
+  (when-let* ((ol (car (last twidget-overlays)))
+              (beg (ov-beg ol))
+              (id (ov-val ol 'twidget-id))
+              (data (progn (goto-char beg)
+                           (ewoc-data (ewoc-locate twidget-ewoc))))
+              (value (progn (goto-char beg)
+                            (plist-get (cdr data) :value))))
+    (set-window-margins (selected-window) 2)
+    ;; save all twidget data in `twidget-data' variable.
+    (setq twidget-value value)
+    (setq twidget-active-id id)
+    (setq twidget-active-data data)
+    (setq twidget-data (twidget--update-twidget-data))
+    (twidget-ewoc-refresh twidget-ewoc)
+    (twidget-mode 1)
+    (twidget--bind-key)
+    (read-only-mode 1)
+    ;; (setq twidget-start-pos
+    ;;       (ewoc-location (ewoc-locate twidget-ewoc beg)))
+    ;; (goto-char twidget-start-pos)
+    (goto-char beg)))
+
 (defun twidget--update-twidget-data ()
   "Return the ewoc data of all twidget nodes."
   (ewoc-collect
@@ -393,18 +418,6 @@ Remaining arguments form a sequence of NAME VALUE pairs."
    (lambda (data)
      (and (listp data)
           (member (car data) twidget-components)))))
-
-(defun twidget--after-setup ()
-  "Setting keyhint of the first twidget, binding keys and so on."
-  (when-let* ((ov (car (last twidget-overlays)))
-              (beg (ov-beg ov)))
-    (set-window-margins (selected-window) 2)
-    ;; save all twidget data in `twidget-data' variable.
-    (setq twidget-data (twidget--update-twidget-data))
-    (twidget--bind-key)
-    (twidget-mode 1)
-    (read-only-mode 1)
-    (goto-char beg)))
 
 (defun twidget--bind-key ()
   "Bind the key of twidget."
@@ -449,24 +462,52 @@ Remaining arguments form a sequence of NAME VALUE pairs."
          (active-p (when ol
                      (twidget-active-p (ov-val ol 'twidget-id)))))
     (unless active-p
-      (when-let ((ov (car (ov-in 'twidget-id twidget-active-id))))
+      (when-let ((ov (car (last (ov-in 'twidget-id twidget-active-id)))))
+        ;; FIXME: 107~107 error overlay
         (goto-char (ov-beg ov))))))
+
+(defun twidget--ids ()
+  "Return a list of all twidget ids."
+  (mapcar (lambda (data)
+            (plist-get (cdr data) :id))
+          twidget-data))
 
 (defun twidget--next-twidget ()
   "Jump to the beginning of next twidget, 
 return a cons cell of position and twidget id."
   (twidget--correct-cursor)
-  (when-let ((ol (ov-next 'twidget-id)))
-    (goto-char (ov-beg ol))
-    (cons (ov-val ol 'twidget-id) (point))))
+  (let* ((ids (twidget--ids)))
+    (when-let* ((len (length ids))
+                (ol (ov-at))
+                (id (ov-val ol 'twidget-id))
+                (nth (seq-position ids id))
+                (next-nth (% (1+ nth) len))
+                (next-id (nth next-nth ids))
+                (next-ol (car (last (ov-in 'twidget-id next-id))))
+                (next-beg (ov-beg next-ol)))
+      ;; (message "id-beg:%S" (cons next-id next-beg))
+      (cons next-id next-beg))))
 
 (defun twidget--previous-twidget ()
   "Jump to the beginning of previous twidget,
 return a cons cell of position and twidget id."
   (twidget--correct-cursor)
-  (when-let ((ol (ov-prev 'twidget-id)))
-    (goto-char (ov-beg ol))
-    (cons (ov-val ol 'twidget-id) (point))))
+  (let ((ids (twidget--ids)))
+    (when-let* ((len (length ids))
+                (ol (ov-at))
+                (id (ov-val ol 'twidget-id))
+                (nth (seq-position ids id))
+                (previous-nth (% (+ len (1- nth)) len))
+                (previous-id (nth previous-nth ids))
+                (previous-ol (car (last (ov-in 'twidget-id previous-id))))
+                ;; FIXME: 107~107 error overlay
+                (previous-beg (ov-beg previous-ol)))
+      (cons previous-id previous-beg))))
+
+;; (let* ((id (car ids))
+;;        (ol (car (ov-in 'twidget-id id)))
+;;        (beg (ov-beg ol)))
+;;   (cons id beg))
 
 ;;;###autoload
 (defun twidget-jump-forward ()
@@ -475,7 +516,9 @@ return a cons cell of position and twidget id."
   (when-let* ((id-beg (twidget--next-twidget))
               (id (car id-beg))
               (beg (cdr id-beg))
-              (data (ewoc-data (ewoc-locate twidget-ewoc))))
+              (data (save-excursion
+                      (goto-char beg)
+                      (ewoc-data (ewoc-locate twidget-ewoc)))))
     ;; unbind the key of last active twidget
     (twidget--unbind-key twidget-active-data)
     (setq twidget-value (plist-get (cdr data) :value))
@@ -493,7 +536,9 @@ return a cons cell of position and twidget id."
   (when-let* ((id-beg (twidget--previous-twidget))
               (id (car id-beg))
               (beg (cdr id-beg))
-              (data (ewoc-data (ewoc-locate twidget-ewoc))))
+              (data (save-excursion
+                      (goto-char beg)
+                      (ewoc-data (ewoc-locate twidget-ewoc)))))
     (twidget--unbind-key twidget-active-data)
     (setq twidget-value (plist-get (cdr data) :value))
     (setq twidget-active-id id)
@@ -551,7 +596,11 @@ sake of jumping backward twidgets correctly."
 ;;;###autoload
 (define-minor-mode twidget-mode
   "Minor mode for text widget."
-  nil nil nil)
+  nil nil
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "<tab>") #'twidget-jump-forward)
+    (define-key map (kbd "<backtab>") #'twidget-jump-backward)
+    map))
 
 ;; update twidget node.
 
@@ -705,7 +754,33 @@ properties to update on the node."
                    :require t)
    (twidget-insert "\n\n")
    (twidget-create 'twidget-text
+                   :bind 'gtd-habit-freq-arg3
+                   :format "Next: [t]"
+                   :value "2021/ 4/21")))
+
+(defun gtd-habit-repeat-monthly-twidgets ()
+  (twidget-group
+   'twidget-group1
+   (twidget-create 'twidget-text
+                   :bind 'gtd-habit-freq-arg1
+                   :format "Every [t] months"
+                   :value "1")
+   (twidget-create 'twidget-text
                    :bind 'gtd-habit-freq-arg2
+                   :format "on the [t]st"
+                   :choices gtd-habit-weekdays
+                   :value "1")
+   (twidget-create 'twidget-choice
+                   :bind 'gtd-habit-freq-arg3
+                   :format "\non [t]"
+                   :choices (cons "day" gtd-habit-weekdays)
+                   :value "day"
+                   :separator "/"
+                   :multiple t ;;; FIXME: should be multiple groups!
+                   :require t)
+   (twidget-insert "\n\n")
+   (twidget-create 'twidget-text
+                   :bind 'gtd-habit-freq-arg4
                    :format "Next: [t]"
                    :value "2021/ 4/21")))
 
