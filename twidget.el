@@ -668,6 +668,11 @@ sake of jumping backward twidgets correctly."
        (set (make-local-variable ,bind) (list ,@binds))
        ,@body)))
 
+;; ;;;###autoload
+;; (defun twidget-show-groups ()
+;;   "Helper function to show all groups with different color."
+;;   (interactive))
+
 ;; update twidget node.
 
 (defun twidget--node (id-or-var)
@@ -827,7 +832,7 @@ properties to update on the node."
     (twidget-create 'twidget-text
       :bind 'gtd-habit-freq-arg2
       :format "Next: [t]"
-      :value "2021/ 4/21")))
+      :value "2021/04/21")))
 
 (defun gtd-habit-repeat-weekly-twidgets ()
   (twidget-group 'twidget-group3
@@ -841,13 +846,13 @@ properties to update on the node."
       :bind 'gtd-habit-freq-arg2
       :format "on [t]"
       :choices gtd-habit-weekdays
-      :value "Monday"
+      :value "Monday" :separator "/"
       :fold t :multiple t :require t)
     (twidget-insert "\n\n")
     (twidget-create 'twidget-text
       :bind 'gtd-habit-freq-arg3
       :format "Next: [t]"
-      :value "2021/ 4/21")))
+      :value "2021/04/21")))
 
 (defun gtd-habit-repeat-monthly-twidgets ()
   (twidget-group 'twidget-group3
@@ -884,7 +889,7 @@ properties to update on the node."
     (twidget-create 'twidget-text
       :bind 'gtd-habit-freq-arg4
       :format "Next: [t]"
-      :value "2021/ 4/21")))
+      :value "2021/04/21")))
 
 (defun gtd-habit-repeat-yearly-twidgets ()
   (twidget-group 'twidget-group3
@@ -926,7 +931,7 @@ properties to update on the node."
     (twidget-create 'twidget-text
       :bind 'gtd-habit-freq-arg4
       :format "Next: [t]"
-      :value "2021/ 4/21")))
+      :value "2021/04/21")))
 
 (defun gtd-habit-freq-time-twidgets ()
   (twidget-group 'twidget-group2
@@ -995,25 +1000,12 @@ properties to update on the node."
         ;; TODO#1
         (gtd-habit-ends-widgets))))))
 
-;; (twidget-arrage
-;;  'twidget-group)
-
-;;;###autoload
-(defun twidget-show-groups ()
-  "Helper function to show all groups with different color."
-  (interactive))
-
 (progn
   ;; (display-buffer-in-side-window (get-buffer-create "*twidget test*") nil)
   (pop-to-buffer (get-buffer-create "*twidget test*"))
   ;; (select-window (get-buffer-window "*twidget test*"))
   (let ((inhibit-read-only t))
     (erase-buffer))
-  ;;; Next Todo:
-  ;; write a macro to include `twidget--before-setup' and `twidget--after-setup' codes.
-  ;; make the unselected choices invisiable.
-  ;; ewoc action
-  ;; value validation for twidget-text.
   (twidget--before-setup)
   (gtd-habit-repeat-twidgets)
   (gtd-habit-repeat-after-completion-twidgets)
