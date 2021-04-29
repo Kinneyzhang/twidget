@@ -196,6 +196,16 @@ by adding a 'display' property to the first LETTER of twidget."
                                     'display '((raise 0.2) (height 0.85)))
                         letter)))))
 
+(defun twidget--format-number-string (len num)
+  "Format the number NUM according to LEN in twidget choices."
+  (pcase len
+    ((pred (> 10)) (number-to-string num))
+    ((and (pred (<= 10)) (pred (> 100)))
+     (if (< num 10)
+         (format "0%s" num)
+       (number-to-string num)))
+    (_ (error "the length of choices is too large!"))))
+
 
 ;;; twidget component functions
 
@@ -246,10 +256,13 @@ by adding a 'display' property to the first LETTER of twidget."
     (setq plst (plist-put plst :value value))
     (ewoc-set-data node (cons twidget plst))
     (twidget-ewoc-invalidate twidget-ewoc node)
+    ;; before eval the action function, `twidget-value' is still the old one.
+    ;; the old value of `twidget-value' is useful in action function.
+    (when action
+      (funcall action value))
+    ;; after eval the action function, `twidget-value' is updated.
     (setq twidget-value value)
     (set bind twidget-value)
-    (when action
-      (funcall action twidget-value))
     (setq twidget-data (twidget--update-twidget-data))
     (goto-char beg)))
 
@@ -332,7 +345,9 @@ by adding a 'display' property to the first LETTER of twidget."
             (when (search-forward choice nil t)
               (let* ((beg (match-beginning 0))
                      (letter (buffer-substring-no-properties beg (1+ beg))))
-                (twidget--add-keyhint-face beg (number-to-string (1+ i)) letter)))))))))
+                (twidget--add-keyhint-face
+                 beg (twidget--format-number-string (length choices) (1+ i))
+                 letter)))))))))
 
 ;;;###autoload
 (defun twidget-choice-select (choice)
@@ -369,10 +384,10 @@ by adding a 'display' property to the first LETTER of twidget."
     (setq plst (plist-put plst :value value))
     (ewoc-set-data node (cons twidget plst))
     (twidget-ewoc-invalidate twidget-ewoc node)
+    (when action
+      (funcall action value))
     (setq twidget-value value)
     (set bind twidget-value)
-    (when action
-      (funcall action twidget-value))
     (setq twidget-data (twidget--update-twidget-data))
     (goto-char beg)))
 
@@ -491,11 +506,13 @@ by adding a 'display' property to the first LETTER of twidget."
                                 "Input the value: " twidget-value))
            (twidget-text-update-value twidget-value))))
       ('twidget-choice
-       (let ((require (plist-get plst :require))
-             (multiple (plist-get plst :multiple))
-             (choices (plist-get plst :choices)))
-         (dotimes (i (length choices))
-           (define-key twidget-mode-map (kbd (number-to-string (1+ i)))
+       (let* ((require (plist-get plst :require))
+              (multiple (plist-get plst :multiple))
+              (choices (plist-get plst :choices))
+              (len (length choices)))
+         (dotimes (i len)
+           (define-key twidget-mode-map
+             (kbd (twidget--format-number-string len (1+ i)))
              (lambda ()
                (interactive)
                ;; FIXME: simply following code and `twidget-chosice-select'.
@@ -512,11 +529,19 @@ by adding a 'display' property to the first LETTER of twidget."
        (define-key twidget-mode-map (kbd "1")
          (lambda () (interactive) (twidget-button-push)))))))
 
-(defun twidget--unbind-key (data)
-  "Unbind the key of twidget with data DATA."
-  (let* ((choices (plist-get (cdr data) :choices)))
-    (dotimes (i (length choices))
-      (unbind-key (kbd (number-to-string (1+ i))) twidget-mode-map))))
+(defun twidget--unbind-key ()
+  "Unbind the key of twidget."
+  (let ((twidget (car twidget-active-data))
+        (plst (cdr twidget-active-data)))
+    (pcase twidget
+      ((or 'twidget-text 'twidget-button)
+       (unbind-key (kbd "1") twidget-mode-map))
+      ('twidget-choice
+       (let* ((choices (plist-get plst :choices))
+              (len (length choices)))
+         (dotimes (i len)
+           (unbind-key
+            (kbd (twidget--format-number-string len (1+ i))) twidget-mode-map)))))))
 
 (defun twidget--correct-cursor ()
   "Move the cursor point to the beginning of active twidget."
@@ -525,7 +550,6 @@ by adding a 'display' property to the first LETTER of twidget."
                      (twidget-active-p (ov-val ol 'twidget-id)))))
     (unless active-p
       (when-let ((ov (car (ov-in 'twidget-id twidget-active-id))))
-        ;; FIXME: 107~107 error overlay
         (goto-char (ov-beg ov))))))
 
 (defun twidget--next-twidget ()
@@ -569,7 +593,7 @@ return a cons cell of position and twidget id."
                       (goto-char beg)
                       (ewoc-data (ewoc-locate twidget-ewoc)))))
     ;; unbind the key of last active twidget
-    (twidget--unbind-key twidget-active-data)
+    (twidget--unbind-key)
     (setq twidget-value (plist-get (cdr data) :value))
     (setq twidget-active-id id)
     (setq twidget-active-data data)
@@ -588,7 +612,7 @@ return a cons cell of position and twidget id."
               (data (save-excursion
                       (goto-char beg)
                       (ewoc-data (ewoc-locate twidget-ewoc)))))
-    (twidget--unbind-key twidget-active-data)
+    (twidget--unbind-key)
     (setq twidget-value (plist-get (cdr data) :value))
     (setq twidget-active-id id)
     (setq twidget-active-data data)
@@ -734,6 +758,8 @@ properties to update on the node."
   '("Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"))
 (defvar gtd-habit-time-range '("day" "week" "month" "year"))
 (defvar gtd-habit-end-types '("never" "after" "on date"))
+(defvar twidget-test-months
+  '("Jan" "Feb" "Mar" "Apr" "May" "Jun" "Jul" "Aug" "Sep" "Oct" "Nov" "Dec"))
 
 ;; twidget action functions
 
@@ -784,17 +810,19 @@ properties to update on the node."
       :require t)))
 
 (defun gtd-habit-repeat-daily-twidgets ()
-  (twidget-group 'twidget-group2
-    (twidget-create 'twidget-text
-      :bind 'gtd-habit-freq-arg1
-      :format "Every [t] day"
-      :action (lambda (value)
-                (if (> (string-to-number value) 1)
-                    (twidget-update 'gtd-habit-freq-arg1
-                                    :format "Every [t] days")
-                  (twidget-update 'gtd-habit-freq-arg1
-                                  :format "Every [t] day")))
-      :value "1")
+  (twidget-group 'twidget-group3
+    
+    ;; (twidget-create 'twidget-text
+    ;;   :bind 'gtd-habit-freq-arg1
+    ;;   :format "Every [t] day"
+    ;;   :action (lambda (value)
+    ;;             (if (> (string-to-number value) 1)
+    ;;                 (twidget-update 'gtd-habit-freq-arg1
+    ;;                                 :format "Every [t] days")
+    ;;               (twidget-update 'gtd-habit-freq-arg1
+    ;;                               :format "Every [t] day")))
+    ;;   :value "1")
+    
     (twidget-insert "\n\n")
     (twidget-create 'twidget-text
       :bind 'gtd-habit-freq-arg2
@@ -802,20 +830,19 @@ properties to update on the node."
       :value "2021/ 4/21")))
 
 (defun gtd-habit-repeat-weekly-twidgets ()
-  (twidget-group 'twidget-group2
-    (twidget-create 'twidget-text
-      :bind 'gtd-habit-freq-arg1
-      :format "Every [t] weeks"
-      :value "1")
+  (twidget-group 'twidget-group3
+    
+    ;; (twidget-create 'twidget-text
+    ;;   :bind 'gtd-habit-freq-arg1
+    ;;   :format "Every [t] weeks"
+    ;;   :value "1")
+    
     (twidget-create 'twidget-choice
       :bind 'gtd-habit-freq-arg2
       :format "on [t]"
       :choices gtd-habit-weekdays
       :value "Monday"
-      :separator "/"
-      :fold t
-      :multiple t
-      :require t)
+      :fold t :multiple t :require t)
     (twidget-insert "\n\n")
     (twidget-create 'twidget-text
       :bind 'gtd-habit-freq-arg3
@@ -823,11 +850,12 @@ properties to update on the node."
       :value "2021/ 4/21")))
 
 (defun gtd-habit-repeat-monthly-twidgets ()
-  (twidget-group 'twidget-group2
-    (twidget-create 'twidget-text
-      :bind 'gtd-habit-freq-arg1
-      :format "Every [t] months"
-      :value "1")
+  (twidget-group 'twidget-group3
+    
+    ;; (twidget-create 'twidget-text
+    ;;   :bind 'gtd-habit-freq-arg1
+    ;;   :format "Every [t] months"
+    ;;   :value "1")
     
     (twidget-create 'twidget-text
       :bind 'gtd-habit-freq-arg2
@@ -837,13 +865,14 @@ properties to update on the node."
     (twidget-create 'twidget-choice
       :bind 'gtd-habit-freq-arg3
       :choices (cons "day" gtd-habit-weekdays)
-      :format "[t]" :value "day" :separator "/"
-      :fold t :multiple t :require t)
+      :format "[t]" :value "day"
+      :fold t :require t)
+    (twidget-insert " ")
     (twidget-create 'twidget-button
       :value "add"
       :help-echo "Add a twidget group."
       :action (lambda (btn)
-                ))
+                (message "remove a new twidget group")))
     (twidget-create 'twidget-button
       :value "remove"
       :help-echo "Remove a twidget group"
@@ -857,41 +886,122 @@ properties to update on the node."
       :format "Next: [t]"
       :value "2021/ 4/21")))
 
-(defun gtd-habit-ends-widgets ()
+(defun gtd-habit-repeat-yearly-twidgets ()
   (twidget-group 'twidget-group3
+
+    ;; (twidget-create 'twidget-text
+    ;;   :bind 'gtd-habit-freq-arg1
+    ;;   :format "Every [t] years"
+    ;;   :value "1")
+    
+    (twidget-create 'twidget-text
+      :bind 'gtd-habit-freq-arg2
+      :format "\non the [t]st"
+      :choices gtd-habit-weekdays
+      :value "1")
+    (twidget-create 'twidget-choice
+      :bind 'gtd-habit-freq-arg3
+      :choices (cons "day" gtd-habit-weekdays)
+      :format "[t]" :value "day"
+      :fold t :require t)
+    (twidget-create 'twidget-choice
+      :bind 'gtd-habit-freq-arg4
+      :choices twidget-test-months
+      :format "in [t]" :value "Jan"
+      :fold t :require t)
+    (twidget-insert " ")
+    (twidget-create 'twidget-button
+      :value "add"
+      :help-echo "Add a twidget group."
+      :action (lambda (btn)
+                (message "remove a new twidget group")))
+    (twidget-create 'twidget-button
+      :value "remove"
+      :help-echo "Remove a twidget group"
+      :action (lambda (btn)
+                (message "remove a new twidget group")))
+    (twidget-insert "\n")
+    
+    (twidget-insert "\n")
+    (twidget-create 'twidget-text
+      :bind 'gtd-habit-freq-arg4
+      :format "Next: [t]"
+      :value "2021/ 4/21")))
+
+(defun gtd-habit-freq-time-twidgets ()
+  (twidget-group 'twidget-group2
+    (twidget-create 'twidget-text
+      :bind 'gtd-habit-freq-arg1
+      :format "Every [t] day"
+      :value "1")))
+
+(defun gtd-habit-ends-widgets ()
+  (twidget-group 'twidget-group4
     (twidget-insert "\n")
     (twidget-create 'twidget-choice
       :bind 'gtd-habit-end-type
       :choices gtd-habit-end-types
-      :format "Ends: [t]"
-      :value "never"
-      :separator "/"
-      :require t)))
+      :format "Ends: [t]" :value "never"
+      :require t :fold t)))
 
 ;;; TODO: when ewoc-delete, delete the related overlays.
 ;;; update the value of twidget-data
 ;;; figure out the main action of of twidget, write in macros
 ;;; process overlay and twidget-data.
 
-;; twidget-update, twidget-delete, 
+;; twidget-update, twidget-delete,
 
 (defun gtd-habit-freq-type-switch (value)
   (pcase gtd-habit-freq-type
     ("after-completion"
      (twidget-delete-group 'twidget-group2)
      (twidget-delete-group 'twidget-group3)
-     (setq twidget-group3 nil)
+     (twidget-delete-group 'twidget-group4)
+     (setq twidget-group3 nil
+           twidget-group4 nil)
      (gtd-habit-repeat-after-completion-twidgets))
     (_
-     (twidget-delete-group 'twidget-group2)
-     (when (bound-and-true-p twidget-group3)
-       (twidget-delete-group 'twidget-group3))
-     (pcase gtd-habit-freq-type
-       ("daily" (gtd-habit-repeat-daily-twidgets))
-       ("weekly" (gtd-habit-repeat-weekly-twidgets))
-       ("monthly" (gtd-habit-repeat-monthly-twidgets))
-       ("yearly" (gtd-habit-repeat-yearly-twidgets)))
-     (gtd-habit-ends-widgets))))
+     (pcase twidget-value
+       ("after-completion"
+        (twidget-delete-group 'twidget-group2)
+        (gtd-habit-freq-time-twidgets)
+        (pcase gtd-habit-freq-type
+          ("daily" (gtd-habit-repeat-daily-twidgets))
+          ("weekly" (gtd-habit-repeat-weekly-twidgets))
+          ("monthly" (gtd-habit-repeat-monthly-twidgets))
+          ("yearly" (gtd-habit-repeat-yearly-twidgets)))
+        (gtd-habit-ends-widgets))
+       (_
+        ;; (twidget-delete-group 'twidget-group2)
+        ;; (gtd-habit-freq-time-twidgets)
+        (twidget-delete-group 'twidget-group3)
+
+        ;; TODO#1: delete then recreate, it's ugly.
+        ;; try to keep it, should consider insert between groups
+        ;; but `twidget-create' defaultly use `ewoc-enter-last',
+        ;; it will always insert twidget after the last node.
+        (twidget-delete-group 'twidget-group4)
+        
+        ;; goto node in the old group3 or after group2
+        ;; TODO: should not use ewoc-enter-last at all time
+        ;; when insert a node. use `ewoc-enter-after' etc to implement
+        ;; more complex customization.
+        
+        (pcase gtd-habit-freq-type
+          ("daily" (gtd-habit-repeat-daily-twidgets))
+          ("weekly" (gtd-habit-repeat-weekly-twidgets))
+          ("monthly" (gtd-habit-repeat-monthly-twidgets))
+          ("yearly" (gtd-habit-repeat-yearly-twidgets)))
+        ;; TODO#1
+        (gtd-habit-ends-widgets))))))
+
+;; (twidget-arrage
+;;  'twidget-group)
+
+;;;###autoload
+(defun twidget-show-groups ()
+  "Helper function to show all groups with different color."
+  (interactive))
 
 (progn
   ;; (display-buffer-in-side-window (get-buffer-create "*twidget test*") nil)
