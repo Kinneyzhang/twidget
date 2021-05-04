@@ -55,27 +55,25 @@
   "Face for twidget key hint.")
 
 (defface twidget-button-face
-  '((t :box (:line-width -2 :color "#444")
-       :background "#444" :foreground "#fff"))
+  '((t :box (:line-width -3 :color "#888")
+       :background "#888" :foreground "#fff"))
   "Face for button twidget.")
 
-(defvar twidget-ewoc nil
+(defvar-local twidget-ewoc nil
   "EWOC for twidget.")
 
-;; (defvar-local twidget-mode-map
-;;   "Keymap for `twidget-mode'.")
+(defvar-local twidget-curr-groups nil)
 
-(defvar twidget-mode-map nil)
+(defvar twidget-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "<tab>") #'twidget-jump-forward)
+    (define-key map (kbd "<backtab>") #'twidget-jump-backward)
+    map))
 
 (defvar twidget-choice-separator " "
   "Separator between each choices.")
 
-(defvar-local twidget-num 0)
-
-(defvar twidget-group-vars nil
-  "The list of variables binded to all groups.")
-
-(defvar twidget-components
+(defvar twidget-widgets
   '(twidget-text twidget-choice twidget-button)
   "A list of all twidget components.")
 
@@ -131,7 +129,7 @@ PROP2 whose value is VALUE1."
    twidget-ewoc
    (lambda (data)
      (and (listp data)
-          (member (car data) twidget-components)))))
+          (member (car data) twidget-widgets)))))
 
 (defun twidget--ids ()
   "Return a list of all twidget ids."
@@ -393,8 +391,8 @@ by adding a 'display' property to the first LETTER of twidget."
 
 (defun twidget-plain (&rest args)
   "Printer function for plain text."
-  (let ((id (car (last args)))
-        (texts (seq-subseq args 0 -2))
+  (let ((id (nth (1+ (seq-position args :id)) args))
+        (texts (seq-subseq args 0 (seq-position args :id)))
         twidget-beg twidget-end)
     ;; FIXME: find a better function to deal with.
     (setq twidget-beg (point))
@@ -437,7 +435,7 @@ by adding a 'display' property to the first LETTER of twidget."
 (defun twidget-ewoc-pp (data)
   "Pretty printer for twidget ewoc."
   (pcase data
-    ((guard (member (car data) twidget-components))
+    ((guard (member (car data) twidget-widgets))
      (let ((twidget (car data))
            (plst (cdr data)))
        (pcase twidget
@@ -631,59 +629,30 @@ twidget name and the rests are a series of attributes.
 
 Defaultly, insert a blank after twidget is inserted, for
 sake of jumping backward twidgets correctly."
-  (when (member (car args) twidget-components)
-    (ewoc-enter-last twidget-ewoc args)))
+  (when (member (car args) twidget-widgets)
+    (if-let* ((next-id (plist-get (cdr args) :next-id))
+              (node (twidget--node next-id)))
+        (ewoc-enter-before twidget-ewoc node args)
+      (ewoc-enter-last twidget-ewoc args))))
 
 (defun twidget--insert (&rest args)
   "Insert STRING at point."
-  (ewoc-enter-last twidget-ewoc args))
+  (if-let* ((nth (seq-position args :next-id))
+            (next-id (nth (1+ nth) args))
+            (node (twidget--node next-id)))
+      (ewoc-enter-before twidget-ewoc node args)
+    (ewoc-enter-last twidget-ewoc args)))
 
-;;;###autoload
-(defmacro twidget-create (&rest args)
-  (declare (indent defun))
-  (let ((id (org-id-uuid)))
-    `(twidget--create
-      ,@args :id ,id)))
-
-;;;###autoload
-(defmacro twidget-insert (&rest args)
-  (let ((id (org-id-uuid)))
-    `(twidget--insert
-      ,@args :id ,id)))
-
-;;;###autoload
-(defmacro twidget-group (bind &rest body)
-  ;; List all binded variable of twidgets in body to BIND, leave body.
-  (declare (indent defun))
-  (let* (expanded-body
-         (binds (mapcar
-                 (lambda (code)
-                   (let ((expanded-code (macroexpand code)))
-                     ;; should only expand once for sake of the unique id.
-                     (push expanded-code expanded-body)
-                     (car (last expanded-code))))
-                 body))
-         (body (reverse expanded-body)))
-    `(progn
-       (set (make-local-variable ,bind) (list ,@binds))
-       ,@body)))
-
-;; ;;;###autoload
-;; (defun twidget-show-groups ()
-;;   "Helper function to show all groups with different color."
-;;   (interactive))
-
-;; update twidget node.
-
-(defun twidget--node (id-or-var)
-  "Return the ewoc node of twidget with twidget-id ID."
+(defun twidget--node (bind-or-id)
+  "Return the ewoc node of twidget with binded
+variable BIND or twidget-id ID."
   (let (id)
-    (pcase id-or-var
+    (pcase bind-or-id
       ((and (pred stringp)
             (pred org-uuidgen-p))
-       (setq id id-or-var))
+       (setq id bind-or-id))
       ((pred symbolp)
-       (setq id (twidget--prop-value :bind id-or-var twidget-data :id))))
+       (setq id (twidget--prop-value :bind bind-or-id twidget-data :id))))
     (if-let ((ov (car (ov-in 'twidget-id id))))
         (ewoc-locate twidget-ewoc (ov-beg ov))
       (error "twidget with id %s searched failed!" id))))
@@ -700,34 +669,111 @@ PROPERTIES is a sequence of PROPERTY VALUE pairs."
     (ewoc-set-data node (cons twidget plst))
     (twidget-ewoc-invalidate twidget-ewoc node)))
 
-;;;###autoload
-(defun twidget-update (bind &rest properties)
-  "Update the properties of twidget binded with variable BIND.
-Remaining arguments form a sequence of PROPERTY VALUE pairs for text
-properties to update on the node."
-  (twidget--update-twidget (twidget--node bind) properties))
+(defun twidget--refresh (old new)
+  "Update ewoc nodos With the minimum cost.
+Replace the old groups OLD with the new groups NEW"
+  (let ((len1 (length old))
+        (len2 (length new))
+        (i 0) (j 0))
+    (while (< i len1)
+      (if (eq (nth i old) (nth j new))
+          (progn (incf i)
+                 (incf j))
+        (if (not (member (nth i old) new))
+            (progn
+              (twidget-group-delete (nth i old))
+              (incf i))
+          (twidget-group-create (nth j new) (nth i old))
+          (incf j))))
+    (while (< j len2)
+      (twidget-group-create (nth j new))
+      (incf j))))
 
 ;;;###autoload
-(defun twidget-update-multiple (&rest bind-properties)
+(defmacro twidget-create (&rest args)
+  (declare (indent defun))
+  (let ((id (org-id-uuid)))
+    `(twidget--create
+      ,@args :id ,id)))
+
+;;;###autoload
+(defmacro twidget-insert (&rest args)
+  (let ((id (org-id-uuid)))
+    `(twidget--insert
+      ,@args :id ,id)))
+
+;;;###autoload
+(defmacro twidget-group (&rest body)
+  "Return the relative data of twidget group in BODY.
+The first element of the data is a twidget-id list.  
+The rest of data is a list of codes for creating twidgets."
+  (declare (indent defun))
+  (let* (expanded-body
+         (binds (mapcar
+                 (lambda (code)
+                   (let ((expanded-code (macroexpand code)))
+                     ;; should only expand once for sake of the unique id.
+                     (push expanded-code expanded-body)
+                     (plist-get (cddr expanded-code) :id)))
+                 body))
+         (body (reverse expanded-body)))
+    `(cons ',binds ',body)))
+
+;; ;;;###autoload
+;; (defun twidget-show-groups ()
+;;   "Helper function to show all groups with different color."
+;;   (interactive))
+
+;; update twidget node.
+
+;;;###autoload
+(defun twidget-update (bind-or-id &rest properties)
+  "Update the properties of twidget with binded variable or
+twidget-id.  BIND-OR-ID is either a binded variable or a twidget-id.
+
+Remaining arguments PROPERTIES is a sequence of property value
+pairs for text properties to update on the node."
+  (twidget--update-twidget (twidget--node bind-or-id) properties))
+
+;;;###autoload
+(defun twidget-multi-update (&rest twidget-properties)
+  "Update multiple nodes.  Each TWIDGET-PROPERTIES is a form of 
+cons cell of twidget properties.  Twidget is either a binded variable
+or a twidget id."
   (let ((clist (twidget--plist->clist bind-properties)))
     (dolist (item clist)
       (apply #'twidget-update (car item) (cdr item)))))
 
 ;;;###autoload
-(defun twidget-delete (id)
-  "Delete the ewoc nodes with id ID."
+(defun twidget-delete (bind-or-id)
+  "Delete the twidget with binded variable or twidget id.
+BIND-OR-ID is either the variable or id."
   (let ((inhibit-read-only t)
-        (node (twidget--node id)))
+        (node (twidget--node bind-or-id)))
     ;; delete the overlay when deleting a node.
     (ov-clear 'twidget-id id)
     (setq twidget-overlays (ov-in 'twidget-id))
     (ewoc-delete twidget-ewoc node)))
 
 ;;;###autoload
-(defun twidget-delete-group (var)
-  "Delete the twidget-group binded with variable VAR."
+(defun twidget-group-create (group &optional next-group)
+  "Create a twidget GROUP.  If NEXT-GROUP is non-nil, 
+the created group is before the BEXT-GROUP."
+  (let ((sexps (cdr (symbol-value group)))
+        next-id)
+    (if next-group
+        (progn
+          (setq next-id (caar (symbol-value next-group)))
+          (dolist (sexp sexps)
+            (eval (append sexp `(:next-id ,next-id)))))
+      (dolist (sexp sexps)
+        (eval sexp)))))
+
+;;;###autoload
+(defun twidget-group-delete (group)
+  "Delete the twidget-group binded with variable GROUP."
   (let* ((inhibit-read-only t)
-         (ids (symbol-value var))
+         (ids (car (symbol-value group)))
          (nodes (mapcar #'twidget--node ids)))
     (dolist (id ids)
       (ov-clear 'twidget-id id))
@@ -735,281 +781,220 @@ properties to update on the node."
     (apply #'ewoc-delete twidget-ewoc nodes)))
 
 ;;;###autoload
+(defun twidget-refresh (&rest groups)
+  "Refresh the whole twidget buffer according
+to the rest arguments twidget GROUPS.  This command
+only update the groups with changes, such as deleting
+updating or inserting groups."
+  (let ((old-groups twidget-curr-groups)
+        (new-groups groups))
+    (twidget--refresh old-groups new-groups)
+    (setq twidget-curr-groups new-groups)))
+
+;;;###autoload
+(defun twidget-page-create (&rest groups)
+  "Create a twidget page with GROUPS."
+  (mapcar #'twidget-group-create groups)
+  (setq twidget-curr-groups groups))
+
+;;;###autoload
 (define-minor-mode twidget-mode
   "Minor mode for text widget."
-  nil nil
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "<tab>") #'twidget-jump-forward)
-    (define-key map (kbd "<backtab>") #'twidget-jump-backward)
-    map))
+  nil nil nil)
+
+(provide 'twidget)
+;;; twidget.el ends here
+
+;;--------------------------------------------------
 
 
 ;;;; test example
 
-;; (twidget-update-multiple
-;;  'gtd-habit-freq-type '(:value "weekly" :separator nil)
-;;  'gtd-habit-freq-arg1 '(:format "Every [t] day" :value "520")
-;;  'gtd-habit-freq-arg2 '(:format "Next date: [t]")
-;;  'gtd-habit-end-type '(:separator " | " :value "on date"))
+(defvar habit-time-range '("day" "week" "month" "year"))
+(defvar habit-end-types '("never" "after" "on date"))
+(defvar habit-weekdays '("Monday" "Tuesday" "Wednesday"
+                         "Thursday" "Friday" "Saturday" "Sunday"))
+(defvar habit-months '("Jan" "Feb" "Mar" "Apr" "May"
+                       "Jun" "Jul" "Aug" "Sep" "Oct" "Nov" "Dec"))
+(defvar habit-freq-type nil)
+(defvar habit-freq-arg1 nil)
+(defvar habit-freq-arg2 nil)
+(defvar habit-freq-arg3 nil)
+(defvar habit-freq-arg4 nil)
+(defvar habit-next-date nil)
+(defvar habit-end-type nil)
 
-
-(defvar-local gtd-habit-freq-type nil)
-(defvar-local gtd-habit-freq-arg1 nil)
-(defvar-local gtd-habit-freq-arg2 nil)
-(defvar-local gtd-habit-freq-arg3 nil)
-(defvar-local gtd-habit-freq-arg4 nil)
-(defvar-local gtd-habit-end-type nil)
-(defvar gtd-habit-weekdays
-  '("Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"))
-(defvar gtd-habit-time-range '("day" "week" "month" "year"))
-(defvar gtd-habit-end-types '("never" "after" "on date"))
-(defvar twidget-test-months
-  '("Jan" "Feb" "Mar" "Apr" "May" "Jun" "Jul" "Aug" "Sep" "Oct" "Nov" "Dec"))
-
-;; twidget action functions
-
-(defun gtd-habit-update-choices (value)
-  (if (> (string-to-number value) 1)
-      (twidget-update 'gtd-habit-freq-arg2
-                      :choices
-                      (mapcar (lambda (el)
-                                (concat el "s"))
-                              gtd-habit-time-range)
-                      :value
-                      (if (string= "s" (substring gtd-habit-freq-arg2 -1))
-                          gtd-habit-freq-arg2
-                        (concat gtd-habit-freq-arg2 "s")))
-    (twidget-update 'gtd-habit-freq-arg2
-                    :choices gtd-habit-time-range
-                    :value
-                    (if (string= "s" (substring gtd-habit-freq-arg2 -1))
-                        (string-trim-right gtd-habit-freq-arg2 "s")
-                      gtd-habit-freq-arg2))))
-
-;; twidget groups
-
-(defun gtd-habit-repeat-twidgets ()
-  (twidget-group 'twidget-group1
+(defvar habit-repeat-type-group
+  (twidget-group
     (twidget-create 'twidget-choice
-      :bind 'gtd-habit-freq-type
+      :bind 'habit-freq-type
       :choices gtd-habit-regular-feq-type
-      :action #'gtd-habit-freq-type-switch
-      :format "Repeat [t]"
-      :value "after-completion"
-      :separator "/"
-      :require t)
+      :action #'habit-freq-type-switch
+      :format "Repeat [t]" :value "after-completion"
+      :separator "/" :require t)
     (twidget-insert "\n\n")))
 
-(defun gtd-habit-repeat-after-completion-twidgets ()
-  (twidget-group 'twidget-group2
+(defvar habit-after-completion-group
+  (twidget-group
     (twidget-create 'twidget-text
-      :bind 'gtd-habit-freq-arg1
-      :value "1"
-      :action #'gtd-habit-update-choices)
+      :bind 'habit-freq-arg1 :value "1"
+      :action #'habit-plural-choices)
     (twidget-create 'twidget-choice
-      :bind 'gtd-habit-freq-arg2
-      :choices gtd-habit-time-range
+      :bind 'habit-freq-arg2
+      :choices habit-time-range
       :format "[t] after previous item is checked off."
-      :value "week"
-      :separator "/"
-      :require t)))
+      :value "week" :separator "/" :require t)))
 
-(defun gtd-habit-repeat-daily-twidgets ()
-  (twidget-group 'twidget-group3
-    
-    ;; (twidget-create 'twidget-text
-    ;;   :bind 'gtd-habit-freq-arg1
-    ;;   :format "Every [t] day"
-    ;;   :action (lambda (value)
-    ;;             (if (> (string-to-number value) 1)
-    ;;                 (twidget-update 'gtd-habit-freq-arg1
-    ;;                                 :format "Every [t] days")
-    ;;               (twidget-update 'gtd-habit-freq-arg1
-    ;;                               :format "Every [t] day")))
-    ;;   :value "1")
-    
-    (twidget-insert "\n\n")
+(defvar habit-time-interval-group
+  (twidget-group
     (twidget-create 'twidget-text
-      :bind 'gtd-habit-freq-arg2
-      :format "Next: [t]"
-      :value "2021/04/21")))
-
-(defun gtd-habit-repeat-weekly-twidgets ()
-  (twidget-group 'twidget-group3
-    
-    ;; (twidget-create 'twidget-text
-    ;;   :bind 'gtd-habit-freq-arg1
-    ;;   :format "Every [t] weeks"
-    ;;   :value "1")
-    
-    (twidget-create 'twidget-choice
-      :bind 'gtd-habit-freq-arg2
-      :format "on [t]"
-      :choices gtd-habit-weekdays
-      :value "Monday" :separator "/"
-      :fold t :multiple t :require t)
-    (twidget-insert "\n\n")
-    (twidget-create 'twidget-text
-      :bind 'gtd-habit-freq-arg3
-      :format "Next: [t]"
-      :value "2021/04/21")))
-
-(defun gtd-habit-repeat-monthly-twidgets ()
-  (twidget-group 'twidget-group3
-    
-    ;; (twidget-create 'twidget-text
-    ;;   :bind 'gtd-habit-freq-arg1
-    ;;   :format "Every [t] months"
-    ;;   :value "1")
-    
-    (twidget-create 'twidget-text
-      :bind 'gtd-habit-freq-arg2
-      :format "\non the [t]st"
-      :choices gtd-habit-weekdays
-      :value "1")
-    (twidget-create 'twidget-choice
-      :bind 'gtd-habit-freq-arg3
-      :choices (cons "day" gtd-habit-weekdays)
-      :format "[t]" :value "day"
-      :fold t :require t)
-    (twidget-insert " ")
-    (twidget-create 'twidget-button
-      :value "add"
-      :help-echo "Add a twidget group."
-      :action (lambda (btn)
-                (message "remove a new twidget group")))
-    (twidget-create 'twidget-button
-      :value "remove"
-      :help-echo "Remove a twidget group"
-      :action (lambda (btn)
-                (message "remove a new twidget group")))
-    (twidget-insert "\n")
-    
-    (twidget-insert "\n")
-    (twidget-create 'twidget-text
-      :bind 'gtd-habit-freq-arg4
-      :format "Next: [t]"
-      :value "2021/04/21")))
-
-(defun gtd-habit-repeat-yearly-twidgets ()
-  (twidget-group 'twidget-group3
-
-    ;; (twidget-create 'twidget-text
-    ;;   :bind 'gtd-habit-freq-arg1
-    ;;   :format "Every [t] years"
-    ;;   :value "1")
-    
-    (twidget-create 'twidget-text
-      :bind 'gtd-habit-freq-arg2
-      :format "\non the [t]st"
-      :choices gtd-habit-weekdays
-      :value "1")
-    (twidget-create 'twidget-choice
-      :bind 'gtd-habit-freq-arg3
-      :choices (cons "day" gtd-habit-weekdays)
-      :format "[t]" :value "day"
-      :fold t :require t)
-    (twidget-create 'twidget-choice
-      :bind 'gtd-habit-freq-arg4
-      :choices twidget-test-months
-      :format "in [t]" :value "Jan"
-      :fold t :require t)
-    (twidget-insert " ")
-    (twidget-create 'twidget-button
-      :value "add"
-      :help-echo "Add a twidget group."
-      :action (lambda (btn)
-                (message "remove a new twidget group")))
-    (twidget-create 'twidget-button
-      :value "remove"
-      :help-echo "Remove a twidget group"
-      :action (lambda (btn)
-                (message "remove a new twidget group")))
-    (twidget-insert "\n")
-    
-    (twidget-insert "\n")
-    (twidget-create 'twidget-text
-      :bind 'gtd-habit-freq-arg4
-      :format "Next: [t]"
-      :value "2021/04/21")))
-
-(defun gtd-habit-freq-time-twidgets ()
-  (twidget-group 'twidget-group2
-    (twidget-create 'twidget-text
-      :bind 'gtd-habit-freq-arg1
+      :bind 'habit-freq-arg1
       :format "Every [t] day"
+      :action (lambda (value)
+                (if (string= value "1")
+                    (twidget-update 'habit-freq-arg1
+                                    :format "Every [t] day")
+                  (twidget-update 'habit-freq-arg1
+                                  :format "Every [t] days")))
       :value "1")))
 
-(defun gtd-habit-ends-widgets ()
-  (twidget-group 'twidget-group4
+(defvar habit-weekly-specific-group
+  (twidget-group
+    (twidget-create 'twidget-choice
+      :bind 'habit-freq-arg2
+      :format "on [t]"
+      :choices habit-weekdays
+      :value "Monday" :separator "/"
+      :fold t :multiple t :require t)))
+
+(defvar habit-monthly-specific-group
+  (twidget-group
+    (twidget-create 'twidget-text
+      :bind 'habit-freq-arg2
+      :choices habit-weekdays
+      :format "\non the [t]st" :value "1")
+    (twidget-create 'twidget-choice
+      :bind 'habit-freq-arg3
+      :choices (cons "day" habit-weekdays)
+      :format "[t]" :value "day"
+      :fold t :require t)))
+
+(defvar habit-yearly-specific-group
+  (twidget-group
+    (twidget-insert "\n")
+    (twidget-create 'twidget-text
+      :bind 'habit-freq-arg2
+      :choices habit-weekdays
+      :format "on the [t]st" :value "1")
+    (twidget-create 'twidget-choice
+      :bind 'habit-freq-arg3
+      :choices (cons "day" habit-weekdays)
+      :format "[t]" :value "day"
+      :fold t :require t)
+    (twidget-create 'twidget-choice
+      :bind 'habit-freq-arg4
+      :choices habit-months
+      :format "in [t]" :value "Jan"
+      :fold t :require t)))
+
+(defvar habit-add-remove-button-group
+  (twidget-group
+    (twidget-insert " ")
+    (twidget-create 'twidget-button
+      :value "+"
+      :help-echo "Add a twidget group."
+      :action (lambda (btn)
+                (message "remove a new twidget group")))
+    (twidget-create 'twidget-button
+      :value "-"
+      :help-echo "Remove a twidget group"
+      :action (lambda (btn)
+                (message "remove a new twidget group")))
+    (twidget-insert "\n")))
+
+(defvar habit-next-dates-group
+  (twidget-group
+    (twidget-insert "\n\n")
+    (twidget-create 'twidget-text
+      :bind 'habit-next-date
+      :format "Next: [t]"
+      :action #'habit-next-dates-display
+      :value (format-time-string "%Y/%m/%d"))))
+
+;; (defun habit-next-dates-display (_value)
+;;   (pcase habit-freq-type
+;;     ("daily" )))
+
+(defvar habit-end-type-group
+  (twidget-group
     (twidget-insert "\n")
     (twidget-create 'twidget-choice
-      :bind 'gtd-habit-end-type
-      :choices gtd-habit-end-types
+      :bind 'habit-end-type
+      :choices habit-end-types
       :format "Ends: [t]" :value "never"
       :require t :fold t)))
 
-;;; TODO: when ewoc-delete, delete the related overlays.
-;;; update the value of twidget-data
-;;; figure out the main action of of twidget, write in macros
-;;; process overlay and twidget-data.
+;; action functions
 
-;; twidget-update, twidget-delete,
+(defun habit-plural-choices (value)
+  (if (> (string-to-number value) 1)
+      (twidget-update 'habit-freq-arg2
+                      :choices
+                      (mapcar (lambda (el)
+                                (concat el "s"))
+                              habit-time-range)
+                      :value
+                      (if (string= "s" (substring habit-freq-arg2 -1))
+                          habit-freq-arg2
+                        (concat habit-freq-arg2 "s")))
+    (twidget-update 'habit-freq-arg2
+                    :choices habit-time-range
+                    :value
+                    (if (string= "s" (substring habit-freq-arg2 -1))
+                        (string-trim-right habit-freq-arg2 "s")
+                      habit-freq-arg2))))
 
-(defun gtd-habit-freq-type-switch (value)
-  (pcase gtd-habit-freq-type
+(defun habit-freq-type-switch (value)
+  (pcase habit-freq-type
     ("after-completion"
-     (twidget-delete-group 'twidget-group2)
-     (twidget-delete-group 'twidget-group3)
-     (twidget-delete-group 'twidget-group4)
-     (setq twidget-group3 nil
-           twidget-group4 nil)
-     (gtd-habit-repeat-after-completion-twidgets))
-    (_
-     (pcase twidget-value
-       ("after-completion"
-        (twidget-delete-group 'twidget-group2)
-        (gtd-habit-freq-time-twidgets)
-        (pcase gtd-habit-freq-type
-          ("daily" (gtd-habit-repeat-daily-twidgets))
-          ("weekly" (gtd-habit-repeat-weekly-twidgets))
-          ("monthly" (gtd-habit-repeat-monthly-twidgets))
-          ("yearly" (gtd-habit-repeat-yearly-twidgets)))
-        (gtd-habit-ends-widgets))
-       (_
-        ;; (twidget-delete-group 'twidget-group2)
-        ;; (gtd-habit-freq-time-twidgets)
-        (twidget-delete-group 'twidget-group3)
+     (twidget-refresh 'habit-repeat-type-group
+                      'habit-after-completion-group))
+    ("daily"
+     (twidget-refresh
+      'habit-repeat-type-group
+      'habit-time-interval-group
+      'habit-next-dates-group
+      'habit-end-type-group))
+    ("weekly"
+     (twidget-refresh
+      'habit-repeat-type-group
+      'habit-time-interval-group
+      'habit-weekly-specific-group
+      'habit-next-dates-group
+      'habit-end-type-group))
+    ("monthly"
+     (twidget-refresh
+      'habit-repeat-type-group
+      'habit-time-interval-group
+      'habit-monthly-specific-group
+      'habit-next-dates-group
+      'habit-end-type-group))
+    ("yearly"
+     (twidget-refresh
+      'habit-repeat-type-group
+      'habit-time-interval-group
+      'habit-yearly-specific-group
+      'habit-next-dates-group
+      'habit-end-type-group))))
 
-        ;; TODO#1: delete then recreate, it's ugly.
-        ;; try to keep it, should consider insert between groups
-        ;; but `twidget-create' defaultly use `ewoc-enter-last',
-        ;; it will always insert twidget after the last node.
-        (twidget-delete-group 'twidget-group4)
-        
-        ;; goto node in the old group3 or after group2
-        ;; TODO: should not use ewoc-enter-last at all time
-        ;; when insert a node. use `ewoc-enter-after' etc to implement
-        ;; more complex customization.
-        
-        (pcase gtd-habit-freq-type
-          ("daily" (gtd-habit-repeat-daily-twidgets))
-          ("weekly" (gtd-habit-repeat-weekly-twidgets))
-          ("monthly" (gtd-habit-repeat-monthly-twidgets))
-          ("yearly" (gtd-habit-repeat-yearly-twidgets)))
-        ;; TODO#1
-        (gtd-habit-ends-widgets))))))
-
-(progn
-  ;; (display-buffer-in-side-window (get-buffer-create "*twidget test*") nil)
+(defun habit-freq-customize ()
+  (interactive)
   (pop-to-buffer (get-buffer-create "*twidget test*"))
-  ;; (select-window (get-buffer-window "*twidget test*"))
   (let ((inhibit-read-only t))
     (erase-buffer))
   (twidget--before-setup)
-  (gtd-habit-repeat-twidgets)
-  (gtd-habit-repeat-after-completion-twidgets)
+  (twidget-page-create 'habit-repeat-type-group
+                       'habit-after-completion-group)
   (twidget--after-setup))
 
-(provide 'twidget)
-;;; twidget.el ends here
+(habit-freq-customize)
