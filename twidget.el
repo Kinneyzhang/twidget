@@ -478,7 +478,7 @@ by adding a 'display' property to the first LETTER of twidget."
     ((guard (stringp (car data)))
      (apply #'twidget-plain data))))
 
-(defun twidget--before-setup ()
+(defun twidget-buffer-setup ()
   "Some buffer settings for twidget."
   (let* ((info "Press <tab> to jump to next twidget,\
  <shift-tab> to jump backward, press the number key to do selection.")
@@ -491,10 +491,10 @@ by adding a 'display' property to the first LETTER of twidget."
     (remove-overlays)
     (buffer-disable-undo)
     (read-only-mode -1)
-    (setq cursor-type t)
+    (setq cursor-type nil)
     (set (make-local-variable 'twidget-ewoc) ewoc)))
 
-(defun twidget--after-setup ()
+(defun twidget-bind-keymap ()
   "Setting keyhint of the first twidget, binding keys and so on."
   (when-let* ((ol (car (last twidget-overlays)))
               (beg (ov-beg ol))
@@ -503,7 +503,6 @@ by adding a 'display' property to the first LETTER of twidget."
                            (ewoc-data (ewoc-locate twidget-ewoc))))
               (value (progn (goto-char beg)
                             (plist-get (cdr data) :value))))
-    (set-window-margins (selected-window) 2)
     ;; save all twidget data in `twidget-data' variable.
     (setq twidget-value value)
     (setq twidget-active-id id)

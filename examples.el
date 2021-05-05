@@ -348,11 +348,11 @@ ARGS are the data used to caculate next dates."
   (pop-to-buffer (get-buffer-create "*twidget test*"))
   (let ((inhibit-read-only t))
     (erase-buffer))
-  (twidget--before-setup)
+  (twidget-buffer-setup)
   (twidget-page-create
    'habit-title-group
    'habit-repeat-type-group
    'habit-after-completion-group)
-  (twidget--after-setup))
+  (twidget-bind-keymap))
 
 (habit-freq-customize)

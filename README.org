@@ -12,15 +12,48 @@ Twidget is a text widget library in emacs. It allows you to create plain text wi
    #+END_SRC
 
 ** Usage
-   Main functions and macros:
-   - twidget-create
+   
+
+   *twidget-create (twidget &rest args)*
+
+   Create a twidget. The first argument is the symbol of valid twidget, the rest arguments are the properties of the twidget.
+
+   #+BEGIN_SRC emacs-lisp
+   (defvar editors '("emacs" "vim" "vscode" "sublime text"))
+   (progn
+     (pop-to-buffer (get-buffer-create "*Twidget Test*"))
+     (let ((inhibit-read-only t))
+       (erase-buffer))
+     (twidget-buffer-setup)
+     ;; twidget-text
+     (twidget-create 'twidget-text
+       :bind 'twidget-text-var
+       :format "happy hacking [t]."
+       :value "emacs")
+     ;; twidget-choice
+     (twidget-create 'twidget-choice
+       :bind 'twidget-choice-var
+       :choices editors
+       :format "\nWhat's your favoriate editor: [t]"
+       :value "emacs"
+       :separator "/"
+       :action (lambda (value)
+                 (message "%s is my favoriate editor!" value))
+       :require t
+       :multiple nil
+       :fold nil)
+     (twidget-bind-keymap))
+   #+END_SRC
+     
    - twidget-insert
    - twidget-update
    - twidget-multi-update
    - twidget-delete
+
    - twidget-group
    - twidget-group-create
    - twidget-group-delete
+
    - twidget-refresh
    - twidget-page-create
    
