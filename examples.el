@@ -77,24 +77,12 @@ If FROM is nil, make changes to the current date."
                                 (concat from " 00:00:00")))
              ,(* num 86400))))))
 
-(defun habit--next-date-update (date &rest args)
+(defun habit--next-date-update (first-date &rest args)
   "Update the series of next dates.
 ARGS are the data used to caculate next dates."
-  (pcase habit-freq-type
-    ("daily"
-     (let ((num-str (string-to-number (car-safe args)))
-           (format-str "Next: [t]"))
-       (dotimes (i 5)
-         (let ((next-date (if (= i 4)
-                              "..."
-                            (habit--date-change '+ (* (1+ i) num-str)
-                                                date))))
-           (setq format-str
-                 (concat format-str ", " next-date))))
-       (twidget-update 'habit-next-date :format format-str)))
-    ("weekly" (message "weekly dates update"))
-    ("monthly" (message "monthly dates update"))
-    ("yearly" (message "yearly dates update"))))
+  (twidget-update
+   'habit-next-date
+   :format (apply #'habit-next-dates--format first-date args)))
 
 (defun habit-next-dates-change-by-interval (value)
   (pcase habit-freq-type
@@ -111,11 +99,26 @@ ARGS are the data used to caculate next dates."
   (twidget-group
     (twidget-create 'twidget-choice
       :bind 'habit-freq-arg2
-      :format "on [t]"
       :choices habit-weekdays
-      :value "Monday" :separator "/"
+      :value '("Monday" "Friday")
+      :format "on [t]" :separator "/"
+      :action '(habit-first-date-change-by-arg
+                habit-next-dates-change-by-arg)
       :fold t :multiple t :require t)))
 
+;; change the first date and the caculate rule at the same time!
+(defun habit-first-date-change-by-arg (value)
+  (pcase habit-freq-type
+    ("weekly"
+     (twidget-update 'habit-next-date
+                     :value (habit-first-date "weekly")))))
+
+(defun habit-next-dates-change-by-arg (value)
+  (pcase habit-freq-type
+    ("weekly"
+     (habit--next-date-update
+      (habit-first-date "weekly") habit-freq-arg1 value))))
+;; ----------------------------------------------------------
 (defvar habit-monthly-specific-group
   (twidget-group
     (twidget-create 'twidget-text
@@ -150,45 +153,103 @@ ARGS are the data used to caculate next dates."
   (twidget-group
     (twidget-insert " ")
     (twidget-create 'twidget-button
-      :value "+"
+      :value "ADD"
       :help-echo "Add a twidget group."
       :action (lambda (btn)
                 (message "remove a new twidget group")))
     (twidget-create 'twidget-button
-      :value "-"
+      :value "REMOVE"
       :help-echo "Remove a twidget group"
       :action (lambda (btn)
-                (message "remove a new twidget group")))
-    (twidget-insert "\n")))
+                (message "remove a new twidget group")))))
 
 (defvar habit-next-dates-group
   (twidget-group
     (twidget-insert "\n\n")
     (twidget-create 'twidget-text
       :bind 'habit-next-date
-      :format (habit-next-dates-display (format-time-string "%Y/%m/%d"))
+      :value (habit-first-date habit-freq-type)
+      :format (habit-next-dates-format (habit-first-date habit-freq-type))
       :action 'habit-next-dates-change-by-first-date
-      :value (format-time-string "%Y/%m/%d")
       :local t)))
 
-(defun habit-next-dates-display (value)
+(defun habit-first-date (type)
+  (let ((curr-date (format-time-string "%Y/%m/%d")))
+    (pcase type
+      ("daily" curr-date)
+      ("weekly"
+       (let* ((num habit-freq-arg1)
+              (selected-weekdays habit-freq-arg2)
+              (selected-nths
+               (mapcar #'1+ (mapcar
+                             (lambda (weekday)
+                               (seq-position habit-weekdays weekday))
+                             selected-weekdays)))
+              (first-nth (car selected-nths))
+              (curr-nth (string-to-number (format-time-string "%u"))))
+         (if (< first-nth curr-nth)
+             (habit--date-change '+ (- 6 (- curr-nth first-nth)) curr-date)
+           (habit--date-change '+ (- first-nth curr-nth) curr-date))))
+      ("monthly" "monthly")
+      ("yearly" "yearly"))))
+
+(defun habit-next-dates--format (first-date &rest args)
   (pcase habit-freq-type
     ("daily"
-     (let ((num-str (string-to-number habit-freq-arg1))
-           (format-str "Next: [t]"))
+     (let ((num (string-to-number (nth 0 args)))
+           (format-str "")
+           next-date)
        (dotimes (i 5)
-         (let ((next-date
-                (if (= i 4) "..."
-                  (habit--date-change '+ (* (1+ i) num-str) value))))
+         (if (= i 0) 
+             (setq format-str (concat format-str "Next: [t]"))
+           (setq next-date (habit--date-change '+ (* i num) first-date))
            (setq format-str (concat format-str ", " next-date))))
-       format-str))
+       (concat format-str ", ...")))
     ("weekly"
-     (let ((num habit-freq-arg1)
-           (weekdays habit-freq-arg2)
-           (today-weekday (format-time-string "%u")))
-       "[t] monthly"))
+     (let* ((format-str "")
+            (week-num (string-to-number (nth 0 args)))
+            (selected-weekdays (nth 1 args))
+            (selected-nths
+             (mapcar #'1+ (mapcar
+                           (lambda (weekday)
+                             (seq-position habit-weekdays weekday))
+                           selected-weekdays)))
+            (first-nth (car selected-nths))
+            (nth-len (length selected-nths))
+            (group-num (/ 5 nth-len))
+            (rest-num (% 5 nth-len))
+            (all-nths (list selected-nths)))
+       (dotimes (_ (1- group-num))
+         (setq all-nths (append all-nths (list selected-nths))))
+       (unless (= rest-num 0)
+         (setq all-nths (append all-nths
+                                (list (seq-subseq selected-nths 0 rest-num)))))
+       (dotimes (i (length all-nths))
+         (let ((group (nth i all-nths)))
+           (dotimes (j nth-len)
+             (when-let ((curr-nth (nth j group)))
+               (if (and (= i 0) (= j 0))
+                   (setq format-str (concat format-str "Next: [t]"))
+                 (setq format-str
+                       (concat format-str ", "
+                               (habit--date-change '+ (+ (* (* i 7) week-num)
+                                                         (- curr-nth first-nth))
+                                                   first-date))))))))
+       (concat format-str ", ...")))
     ("monthly" "[t] monthly")
     ("yearly" "[t] yearly")))
+
+(defun habit-next-dates-format (first-date)
+  (let ((date first-date))
+    (pcase habit-freq-type
+      ("daily" (habit-next-dates--format date habit-freq-arg1))
+      ("weekly" (habit-next-dates--format date habit-freq-arg1
+                                          habit-freq-arg2))
+      ("monthly" (habit-next-dates--format date habit-freq-arg1
+                                           habit-freq-arg2 habit-freq-arg3))
+      ("yearly" (habit-next-dates--format date habit-freq-arg1
+                                          habit-freq-arg2 habit-freq-arg3
+                                          habit-freq-arg4)))))
 
 (defun habit-next-dates-change-by-first-date (value)
   (pcase habit-freq-type
@@ -210,21 +271,36 @@ ARGS are the data used to caculate next dates."
       :format "Ends: [t]" :value "never"
       :local t :require t :fold t)))
 
+;;==============================
+;; test global twidget
+(defvar habit-title nil)
+(defvar habit-title-group
+  (twidget-group
+    (twidget-create 'twidget-text
+      :bind 'habit-title
+      :value "Habit Title")
+    (twidget-insert "\n\n")))
+;;==============================
+
 ;; action functions
 
 (defun habit-freq-type-switch (value)
   (pcase habit-freq-type
     ("after-completion"
-     (twidget-refresh 'habit-repeat-type-group
-                      'habit-after-completion-group))
+     (twidget-refresh
+      'habit-title-group
+      'habit-repeat-type-group
+      'habit-after-completion-group))
     ("daily"
      (twidget-refresh
+      'habit-title-group
       'habit-repeat-type-group
       'habit-interval-group
       'habit-next-dates-group
       'habit-end-type-group))
     ("weekly"
      (twidget-refresh
+      'habit-title-group
       'habit-repeat-type-group
       'habit-interval-group
       'habit-weekly-specific-group
@@ -232,16 +308,20 @@ ARGS are the data used to caculate next dates."
       'habit-end-type-group))
     ("monthly"
      (twidget-refresh
+      'habit-title-group
       'habit-repeat-type-group
       'habit-interval-group
       'habit-monthly-specific-group
+      'habit-add-remove-button-group
       'habit-next-dates-group
       'habit-end-type-group))
     ("yearly"
      (twidget-refresh
+      'habit-title-group
       'habit-repeat-type-group
       'habit-interval-group
       'habit-yearly-specific-group
+      'habit-add-remove-button-group
       'habit-next-dates-group
       'habit-end-type-group))))
 
@@ -269,8 +349,10 @@ ARGS are the data used to caculate next dates."
   (let ((inhibit-read-only t))
     (erase-buffer))
   (twidget--before-setup)
-  (twidget-page-create 'habit-repeat-type-group
-                       'habit-after-completion-group)
+  (twidget-page-create
+   'habit-title-group
+   'habit-repeat-type-group
+   'habit-after-completion-group)
   (twidget--after-setup))
 
 (habit-freq-customize)

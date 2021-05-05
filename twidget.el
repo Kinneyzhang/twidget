@@ -209,6 +209,10 @@ by adding a 'display' property to the first LETTER of twidget."
 
 ;; text twidget
 
+;; Ideas:
+;; macro or function to customize a twidget.
+;; basic twidgets and inherited twidgets.
+
 (defun twidget-text (&rest args)
   "Printer function for 'text' twidget with arguments ARGS."
   (let* ((id (plist-get args :id))
@@ -304,6 +308,7 @@ by adding a 'display' property to the first LETTER of twidget."
     ;; add face properties
     (when value
       (pcase value
+        ;; multiple t
         ((pred listp)
          (with-silent-modifications
            (add-face-text-property twidget-beg twidget-end
@@ -324,6 +329,7 @@ by adding a 'display' property to the first LETTER of twidget."
                  (unless (twidget-active-p id)
                    (put-text-property val-beg (+ val-end (length separator))
                                       'invisible nil)))))))
+        ;; multiple nil
         ((pred stringp)
          (save-excursion
            (goto-char twidget-beg)
@@ -453,15 +459,19 @@ by adding a 'display' property to the first LETTER of twidget."
           (let* ((bind (plist-get plst :bind))
                  (value (plist-get plst :value)))
             (apply #'twidget-text plst)
-            ;; (message "bind: %s" bind)
-            ;; (message "bind-type: %s" (type-of bind))
             (set bind value)))
          ('twidget-choice
-          (let ((bind (plist-get plst :bind))
-                (value (plist-get plst :value)))
+          ;; for twidget-choice, if multiple is non-nil,
+          ;; convert the type of value to list.
+          (let* ((bind (plist-get plst :bind))
+                 (origin-value (plist-get plst :value))
+                 (value (if (plist-get plst :multiple)
+                            (if (not (listp origin-value))
+                                (list origin-value)
+                              origin-value)
+                          origin-value))
+                 (plst (plist-put plst :value value)))
             (apply #'twidget-choice plst)
-            ;; (message "bind: %s" bind)
-            ;; (message "bind-type: %s" (type-of bind))
             (set bind value)))
          ('twidget-button
           (apply #'twidget-button plst)))))
