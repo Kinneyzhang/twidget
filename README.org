@@ -1,3 +1,28 @@
-** twidget gif demo
-   [[./demo1.gif]]
-    
+#+TITLE: Twidget - Text Widget Library
+
+Twidget is a text widget library in emacs. It allows you to create plain text widgets with actions.
+
+** Installation
+   
+   Install the dependency: [[https://github.com/emacsorphanage/ov][ov]], and put the following code in your emacs configuration:
+   
+   #+BEGIN_SRC emacs-lisp
+   (add-to-list 'load-path "<path-to-twidget>")
+   (require 'twidget)
+   #+END_SRC
+
+** Usage
+   Main functions and macros:
+   - twidget-create
+   - twidget-insert
+   - twidget-update
+   - twidget-multi-update
+   - twidget-delete
+   - twidget-group
+   - twidget-group-create
+   - twidget-group-delete
+   - twidget-refresh
+   - twidget-page-create
+   
+** Examples
+   See examples in examples.el

@@ -727,14 +727,16 @@ Replace the old groups OLD with the new groups NEW"
       (incf j))))
 
 ;;;###autoload
-(defmacro twidget-create (&rest args)
+(defmacro twidget-create (twidget &rest args)
+  "Create the twidget TWIDGET with ARGS in current buffer.
+ARGS is a series of form of property value pairs."
   (declare (indent defun))
   (let ((id (org-id-uuid)))
-    `(twidget--create
-      ,@args :id ,id)))
+    `(twidget--create ,twidget ,@args :id ,id)))
 
 ;;;###autoload
 (defmacro twidget-insert (&rest args)
+  "Insert a a series of ARGS string."
   (let ((id (org-id-uuid)))
     `(twidget--insert
       ,@args :id ,id)))
