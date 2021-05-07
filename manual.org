@@ -36,5 +36,3 @@
     | :require   | boolean     | no        |                                            |
     | :fold      | boolean     | no        |                                            |
     | :local     | boolean     | no        |                                            |
-
-*** Create twidget and insert string

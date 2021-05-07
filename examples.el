@@ -343,16 +343,8 @@ ARGS are the data used to caculate next dates."
                         (string-trim-right habit-freq-arg2 "s")
                       habit-freq-arg2))))
 
-(defun habit-freq-customize ()
-  (interactive)
-  (pop-to-buffer (get-buffer-create "*twidget test*"))
-  (let ((inhibit-read-only t))
-    (erase-buffer))
-  (twidget-buffer-setup)
+(with-twidget-buffer "*twidget test*"
   (twidget-page-create
    'habit-title-group
    'habit-repeat-type-group
-   'habit-after-completion-group)
-  (twidget-bind-keymap))
-
-(habit-freq-customize)
+   'habit-after-completion-group))

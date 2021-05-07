@@ -97,9 +97,6 @@
 ;;     "⑦" "⑧" "⑨" "⑩" "⑪" "⑫" "⑬"
 ;;     "⑭" "⑮" "⑯" "⑰" "⑱" "⑲" "⑳"))
 
-(defvar twidget-margin 2
-  "Left margin of twidget buffer.")
-
 (defvar-local twidget-overlays nil
   "List of overlays in twidget buffer.")
 
@@ -132,10 +129,12 @@ PROP2 whose value is VALUE1."
           (member (car data) twidget-widgets)))))
 
 (defun twidget--ids ()
-  "Return a list of all twidget ids."
-  (mapcar (lambda (data)
-            (plist-get (cdr data) :id))
-          twidget-data))
+  "Return a list of all twidget ids except the plain text twidget."
+  (remove nil (mapcar (lambda (data)
+                        (unless (and (eq (car data) 'twidget-text)
+                                     (plist-get (cdr data) :plain))
+                          (plist-get (cdr data) :id)))
+                      twidget-data)))
 
 ;; (defun twidget--ov-in-correction (ovs)
 ;;   "Return the correct overlay when using `ov-in'."
@@ -154,23 +153,20 @@ PROP2 whose value is VALUE1."
     (string= twidget-active-id twidget-id)))
 
 (defun twidget-ewoc-refresh (ewoc)
-  "Add left margin to buffer when refresh ewoc."
-  ;; (mapcar #'delete-overlay twidget-overlays)
+  "Clear the unused overlays when using `ewoc-refresh'."
   (ov-reset twidget-overlays)
   (setq twidget-overlays nil)
-  (ewoc-refresh ewoc)
-  (set-window-margins (selected-window) 2))
+  (ewoc-refresh ewoc))
 
 (defun twidget-ewoc-invalidate (ewoc &rest nodes)
-  "Add left margin to buffer when refresh nodes."
+  "Clear the unused overlays when using `ewoc-invalidate'."
   (let ((ids (mapcar (lambda (node)
                        (plist-get (cdr (ewoc-data node)) :id))
                      nodes)))
     (dolist (id ids)
       (ov-clear 'twidget-id id))
     (apply #'ewoc-invalidate ewoc nodes)
-    (setq twidget-overlays (ov-in 'twidget-id))
-    (set-window-margins (selected-window) 2)))
+    (setq twidget-overlays (ov-in 'twidget-id))))
 
 (defun twidget-overlay (beg end &rest overlays)
   "Make overlay on BEG and END in buffer with PROPERTIES.
@@ -220,31 +216,74 @@ by adding a 'display' property to the first LETTER of twidget."
          (value (or (plist-get args :value) " "))
          (val-len (length value))
          (format (plist-get args :format))
+         (plain (plist-get args :plain))
          twidget-beg twidget-end)
-    (if format
-        (progn
-          (setq twidget-beg (+ (point) (string-match "\\[t\\]" format)))
-          (setq twidget-end (+ twidget-beg val-len))
-          ;; leave one blank after each twidget
-          ;; for sake of jumping back correctly
-          (insert (replace-regexp-in-string "\\[t\\]" value format t) " "))
-      (setq twidget-beg (point))
-      (setq twidget-end (+ val-len twidget-beg))
-      ;; leave one blank after each twidget
-      ;; for sake of jumping back correctly
-      (insert value " "))
+    (pcase value
+      ((pred listp)
+       (let ((len (length value))
+             beg end alst)
+         (if format
+             (progn
+               (dotimes (i len)
+                 (setq beg (+ (point) (string-match (format "\\[t%s\\]" i) format)))
+                 (setq end (+ beg (length (nth i value))))
+                 (push (cons beg end) alst)
+                 (pcase i
+                   (0 (setq twidget-beg beg))
+                   ((pred (= (1- len)))
+                    (setq twidget-end end)))
+                 (setq format (replace-regexp-in-string (format "\\[t%s\\]" i)
+                                                        (nth i value) format t)))
+               (insert format " "))
+           (setq twidget-beg (point))
+           (dotimes (i len)
+             (setq beg (point))
+             (insert (nth i value) " ")
+             (setq end (point))
+             (push (cons beg end) alst)
+             (pcase i
+               (0 (setq twidget-beg beg))
+               ((pred (= (1- len)))
+                (setq twidget-end end)))))
+         (setq alst (reverse alst))
+         (dotimes (i len)
+           (setq beg (car (nth i alst)))
+           (setq end (cdr (nth i alst)))
+           (unless plain
+             ;; add face properties
+             (with-silent-modifications
+               (add-text-properties beg end '(face (twidget-choice-selected-face
+                                                    :background "#eee"))))
+             ;; add keyhint
+             (when (twidget-active-p id)
+               (let ((letter (buffer-substring-no-properties beg (1+ beg))))
+                 (twidget--add-keyhint-face beg (format "%s" (1+ i)) letter)))))))
+      (_
+       (if format
+           (progn
+             (setq twidget-beg (+ (point) (string-match "\\[t\\]" format)))
+             (setq twidget-end (+ twidget-beg val-len))
+             ;; leave one blank after each twidget
+             ;; for sake of jumping back correctly
+             (insert (replace-regexp-in-string "\\[t\\]" value format t) " "))
+         (setq twidget-beg (point))
+         (setq twidget-end (+ val-len twidget-beg))
+         ;; leave one blank after each twidget
+         ;; for sake of jumping back correctly
+         (insert value " "))
+       (unless plain
+         ;; add face properties
+         (with-silent-modifications
+           (add-text-properties twidget-beg twidget-end
+                                '(face (twidget-choice-selected-face
+                                        :background "#eee"))))
+         ;; add keyhint
+         (when (twidget-active-p id)
+           (let ((letter (buffer-substring-no-properties
+                          twidget-beg (1+ twidget-beg))))
+             (twidget--add-keyhint-face twidget-beg "1" letter))))))
     ;; add twidget-id overlay
-    (twidget-overlay twidget-beg twidget-end 'twidget-id id)
-    ;; add face properties
-    (with-silent-modifications
-      (add-text-properties twidget-beg twidget-end
-                           `(face (twidget-choice-selected-face
-                                   :background "#eee"))))
-    ;; add keyhint
-    (when (twidget-active-p id)
-      (let ((letter (buffer-substring-no-properties
-                     twidget-beg (1+ twidget-beg))))
-        (twidget--add-keyhint-face twidget-beg "1" letter)))))
+    (twidget-overlay twidget-beg twidget-end 'twidget-id id)))
 
 (defun twidget-text-update-value (value)
   "Update current active text twidget."
@@ -420,13 +459,14 @@ by adding a 'display' property to the first LETTER of twidget."
   "Printer function for 'button' twidget with arguments ARGS."
   (let ((id (plist-get args :id))
         (value (plist-get args :value))
+        (follow-link (plist-get args :follow-link))
         (action (plist-get args :action))
         (help-echo (plist-get args :help-echo))
         twidget-beg)
     (setq twidget-beg (point))
     (insert-button value
                    'face 'twidget-button-face
-                   'follow-link t
+                   'follow-link follow-link
                    'action action
                    'help-echo help-echo
                    'twidget-id id)
@@ -480,12 +520,13 @@ by adding a 'display' property to the first LETTER of twidget."
 
 (defun twidget-buffer-setup ()
   "Some buffer settings for twidget."
-  (let* ((info "Press <tab> to jump to next twidget,\
- <shift-tab> to jump backward, press the number key to do selection.")
+  (let* (;; (info "Press <tab> to jump to next twidget,\
+         ;; <shift-tab> to jump backward, press the number key to do selection.")
          (ewoc (ewoc-create
                 'twidget-ewoc-pp
-                (propertize
-                 (concat info "\n\n") 'face '(shadow italic))
+                nil
+                ;; (propertize
+                ;;  (concat info "\n\n") 'face '(shadow italic))
                 nil t)))
     (kill-all-local-variables)
     (remove-overlays)
@@ -520,12 +561,23 @@ by adding a 'display' property to the first LETTER of twidget."
         (plst (cdr twidget-active-data)))
     (pcase twidget
       ('twidget-text
-       (define-key twidget-mode-map (kbd "1")
-         (lambda ()
-           (interactive)
-           (setq twidget-value (read-from-minibuffer
-                                "Input the value: " twidget-value))
-           (twidget-text-update-value twidget-value))))
+       (pcase twidget-value
+         ((pred listp)
+          (dotimes (i (length twidget-value))
+            (define-key twidget-mode-map (kbd (format "%s" (1+ i)))
+              (lambda ()
+                (interactive)
+                (setf (nth i twidget-value)
+                      (read-from-minibuffer
+                       "Input the value: " (nth i twidget-value)))
+                (twidget-text-update-value twidget-value)))))
+         (_
+          (define-key twidget-mode-map (kbd "1")
+            (lambda ()
+              (interactive)
+              (setq twidget-value (read-from-minibuffer
+                                   "Input the value: " twidget-value))
+              (twidget-text-update-value twidget-value))))))
       ('twidget-choice
        (let* ((require (plist-get plst :require))
               (multiple (plist-get plst :multiple))
@@ -686,11 +738,18 @@ PROPERTIES is a sequence of PROPERTY VALUE pairs."
   (let* ((data (ewoc-data node))
          (twidget (car data))
          (plst (cdr data))
-         (alist (twidget--plist->clist properties)))
+         (alist (twidget--plist->clist properties))
+         value)
     (dolist (item alist)
-      (setq plst (plist-put plst (car item) (cdr item))))
+      (setq plst (plist-put plst (car item) (cdr item)))
+      (when (eq :value (car item))
+        (setq value (cdr item))))
     (ewoc-set-data node (cons twidget plst))
-    (twidget-ewoc-invalidate twidget-ewoc node)))
+    (twidget-ewoc-invalidate twidget-ewoc node)
+    ;; if value is updated, do action.
+    (when value
+      (when-let ((func (plist-get plst :action)))
+        (funcall func value)))))
 
 (defun twidget--refresh (old new)
   "Update ewoc nodos With the minimum cost.
@@ -771,7 +830,7 @@ pairs for text properties to update on the node."
   "Update multiple nodes.  Each TWIDGET-PROPERTIES is a form of 
 cons cell of twidget properties.  Twidget is either a binded variable
 or a twidget id."
-  (let ((clist (twidget--plist->clist bind-properties)))
+  (let ((clist (twidget--plist->clist twidget-properties)))
     (dolist (item clist)
       (apply #'twidget-update (car item) (cdr item)))))
 
@@ -829,9 +888,33 @@ updating or inserting groups."
   (setq twidget-curr-groups groups))
 
 ;;;###autoload
+(defmacro with-twidget-setup (&rest body)
+  "Prepare the environment for twidget.
+Add `twidget-buffer-setup' function before BODY codes and 
+`twidget-bind-keymap' function after BODY codes."
+  `(progn
+     (twidget-buffer-setup)
+     ,@body
+     (twidget-bind-keymap)))
+
+;;;###autoload
+(defmacro with-twidget-buffer (buffer-or-name &rest body)
+  "A modified macro of `with-current-buffer' for twidget."
+  (declare (indent defun))
+  `(progn
+     (pop-to-buffer (get-buffer-create ,buffer-or-name))
+     (let ((inhibit-read-only t))
+       (erase-buffer))
+     (with-twidget-setup
+      ,@body)))
+
+;;;###autoload
 (define-minor-mode twidget-mode
   "Minor mode for text widget."
-  nil nil nil)
+  nil nil nil
+  (if twidget-mode
+      (add-hook 'kill-buffer-hook #'twidget--unbind-key nil t)
+    (remove-hook 'kill-buffer-hook #'twidget--unbind-key t)))
 
 (provide 'twidget)
 ;;; twidget.el ends here

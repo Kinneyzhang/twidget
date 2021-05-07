@@ -1,0 +1,187 @@
+#+TITLE: Twidget - Emacs中的文本控件库（Beta）
+
+** 介绍
+   *Twidget* 的意思是 text widget, 即文本控件库。Emacs有一个 [[https://www.gnu.org/software/emacs/manual/html_mono/widget.html][widget library]]，我使用后感觉不是很好用，并且需要使用鼠标操作。Twidget的设计遵循了简单易用，全键盘操作的理念，并且和 [[https://www.gnu.org/software/emacs/manual/html_node/elisp/Abstract-Display.html][ewoc]] 做了很好的融合，可以轻松创建一个复杂的交互界面。
+
+   在介绍具体的API之前，让我们先来一瞥使用 twidget 实现的例子的展示效果：
+   
+   
+** 使用
+*** 基本控件
+    Twidget 目前有3个基本控件: =twidget-text=, =twidget-choice= 和 =twidget-button= 。我们可以使用一些统一的函数或宏来创建这些控件并插入到buffer中。每一种控件都有自己的键值对属性，可以通过指定键值对参数来控制其显示效果或行为。
+
+    *twidget-text 文本控件*
+
+    文本控件 有一个可编辑的区域，可以通过按键修改其展示的值并绑定到变量中。
+
+    主要键值对参数:
+
+    | 属性    | 类型          | 必须 | 含义                                                                                               |
+    |---------+---------------+------+----------------------------------------------------------------------------------------------------|
+    | :bind   | 符号          | 是   | 控件的:value值会绑定到该符号变量中                                                                 |
+    | :value  | 字符串        | 是   | 编辑区域的显示的值                                                                                 |
+    | :format | 字符串        | 否   | 完整的控件字符串, 其中用 "[t]" 代表编辑区域                                                        |
+    | :action | 函数/函数列表 | 否   | 编辑区域内容更新后触发的行为, 默认参数为当前的value                                                |
+    | :plain  | 布尔值        | 否   | 隐藏编辑区域，显示为不可编辑的纯文本(和 twidget-insert 插入的文本不同的是，该区域可以通过代码修改) |
+    | :local  | 布尔值        | 否   | 是否为局部控件, 局部控件在每次刷新(twidget-refresh)时会恢复到原始值                                |
+    
+    *twidget-choice 选择控件*
+
+    选择控件 可以通过按键单选或多选一个列表中的值，并绑定到变量中。
+
+    主要键值对参数:
+
+    | 属性       | 类型          | 必须 | 含义                                                                |
+    |------------+---------------+------+---------------------------------------------------------------------|
+    | :bind      | 符号          | 是   | 控件的:value值会绑定到该符号变量中                                  |
+    | :choices   | 列表          | 是   | 选项列表                                                            |
+    | :value     | 字符串/列表   | 否   | 选中的选项值，单选时是字符串，多选时是列表                          |
+    | :format    | 字符串        | 否   | 完整的控件字符串, 其中用 "[t]" 代表编辑区域                         |
+    | :action    | 函数/函数列表 | 否   | 选择选项后触发的行为, 默认参数为当前的value                         |
+    | :separator | 字符串        | 否   | 不同选项间的分隔符，默认为一个空格                                  |
+    | :multiple  | 布尔值        | 否   | 是否为多选, 默认为为单选                                            |
+    | :fold      | 布尔值        | 否   | 是否折叠隐藏未选择的选项，默认全部显示                              |
+    | :require   | 布尔值        | 否   | 是否至少选中一项，默认非必须                                        |
+    | :local     | 布尔值        | 否   | 是否为局部控件, 局部控件在每次刷新(twidget-refresh)时会恢复到原始值 |
+
+    *twidget-button 按钮控件*
+
+    按钮控件 点击后触发特定的行为。
+
+    | 属性         | 类型   | 必须 | 含义                                    |
+    |--------------+--------+------+-----------------------------------------|
+    | :bind        | 符号   | 是   | 控件的:value值会绑定到该符号变量中      |
+    | :value       | 字符串 | 是   | 按钮显示的文本                          |
+    | :action      | 函数   | 是   | 按钮作用后触发的行为                    |
+    | :help-echo   | 字符串 | 否   | 鼠标悬浮在按钮上时的tip，默认无         |
+    | :follow-link | 布尔值 | 否   | 按钮是否可用鼠标点击，默认不可          |
+
+*** 控件API
+
+    *插入控件*
+
+    创建一个控件使用 =twidget-create= 宏。该宏的第一个参数为控件符号，其余参数为键值对。插入一段纯文本使用 =twidget-insert= 宏。该宏接受一系列的字符串，和 =insert= 用法相同。例：
+
+    #+BEGIN_SRC emacs-lisp
+    (defvar habit-freq-title nil)
+    (defvar habit-freq-type nil)
+    (defvar habit-regular-feq-type '("after-completion" "daily" "weekly" "monthly" "yearly"))
+    (defun habit-freq-type-switch (value)
+      (message "current type is \"%s\"!" value))
+
+    (with-twidget-buf "*Twidget Test*"
+      (twidget-create 'twidget-text
+        :bind 'habit-freq-title
+        :value "Habit Frequency Selection"
+        :format "Title: [t]"
+        :action (lambda (value)
+                  (message "the title is \"%s\"" value)))
+      (twidget-insert "\n\n")
+      (twidget-create 'twidget-choice
+        :bind 'habit-freq-type
+        :choices habit-regular-feq-type
+        :value "after-completion"
+        :format "Repeat [t]"
+        :action #'habit-freq-type-switch
+        :separator "/"
+        ;; :multiple nil
+        ;; :fold nil
+        ;; :local nil
+        :require t))
+    #+END_SRC
+
+    *更新控件*
+
+    - twidget-update (bind-or-id &rest properties)
+
+      更新单个控件。bind-or-id 指被更新的控件的 =:bind= 属性值或 twidget-id(仅开发用)。properties 是一系列需要更新的键值对。例：
+
+    #+BEGIN_SRC emacs-lisp
+    (defvar twidget-test-editors '("emacs" "vim" "vscode" "sublime text"))
+    (defvar twidget-test-editor nil)
+    (defvar twidget-test-string nil)
+
+    (with-twidget-buffer "*Twidget Test*"
+      (twidget-create 'twidget-choice
+        :bind 'twidget-test-editor
+        :choices twidget-test-editors
+        :format "Editors: [t]"
+        :value "emacs"
+        :separator "/"
+        :action (lambda (value)
+                  (twidget-update
+                   'twidget-test-string :value (capitalize value)))
+        :require t)
+      (twidget-insert "\n\n")
+      (twidget-create 'twidget-text
+        :bind 'twidget-test-string
+        :format "  - [t] is my favorite editor!"
+        :value "Emacs"
+        :plain t)
+      (twidget-create 'twidget-button
+        :value "switch"
+        :action (lambda (btn)
+                  (let* ((choices twidget-test-editors)
+                         (editor (downcase twidget-test-editor))
+                         (nth (seq-position choices editor)))
+                    (twidget-update
+                     'twidget-test-editor
+                     :value (capitalize (nth (% (1+ nth) (length choices)) choices)))))))
+    #+END_SRC
+
+    
+    - twidget-multi-update (&rest twidget-properties)
+
+      更新多个控件。twidget-properties 的形式参考例子。
+
+    #+BEGIN_SRC emacs-lisp
+    (defvar example-editor nil)
+    (defvar example-string nil)
+    (defvar example-link nil)
+    (defvar example-editors '("emacs" "vim" "vscode" "sublime text"))
+    (defvar example-websites
+      '(("emacs" "https://www.gnu.org/software/emacs/")
+        ("vim" "https://www.vim.org")
+        ("vscode" "https://code.visualstudio.com")
+        ("sublime text" "https://www.sublimetext.com")))
+
+    (with-twidget-buffer "*Twidget Test*"
+      (twidget-create 'twidget-choice
+        :bind 'example-editor
+        :choices example-editors
+        :format "\nEditors: [t]"
+        :value "emacs"
+        :separator "/"
+        :action (lambda (value)
+                  (twidget-multi-update
+                   'example-string `(:value ,(capitalize value))
+                   'example-link `(:value ,(assoc value example-websites))))
+        :require t)
+      (twidget-create 'twidget-button
+        :value "#switch#"
+        :action (lambda (btn)
+                  (let* ((choices example-editors)
+                         (editor (downcase example-editor))
+                         (nth (seq-position choices editor)))
+                    (twidget-update
+                     'example-editor
+                     :value (nth (% (1+ nth) (length choices)) choices)))))
+      (twidget-insert "\n\n")
+      (twidget-create 'twidget-text
+        :bind 'example-string
+        :format "  - [t] is my favorite editor."
+        :value "Emacs"
+        :plain t)
+      (twidget-create 'twidget-text
+        :bind 'example-link
+        :format "\n  - The website of [t0] is [t1]."
+        :value '("emacs" "https://www.gnu.org/software/emacs/")
+        :plain t))
+    #+END_SRC
+
+    *删除控件*
+
+*** 控件组API
+
+** 说明
+   Twidget 目前处于测试开发中，后续 API 可能会有变动。如果使用，请密切关注更新。
