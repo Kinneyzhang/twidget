@@ -356,11 +356,13 @@ by adding a 'display' property to the first LETTER of twidget."
              (unless (twidget-active-p id)
                (add-text-properties twidget-beg twidget-end
                                     '(invisible t)))))
+         ;; (message "twidget-str:%s" twidget-str)
          (dolist (val value)
-           (let* ((start (string-match val twidget-str))
-                  (val-len (length val))
-                  (val-beg (+ twidget-beg start))
-                  (val-end (+ val-beg val-len)))
+           ;; (message "val:%s" val)
+           (when-let* ((start (string-match val twidget-str))
+                       (val-len (length val))
+                       (val-beg (+ twidget-beg start))
+                       (val-end (+ val-beg val-len)))
              (with-silent-modifications
                (put-text-property val-beg val-end
                                   'face 'twidget-choice-selected-face)
@@ -800,6 +802,11 @@ ARGS is a series of form of property value pairs."
       ,@args :id ,id)))
 
 ;;;###autoload
+(defun twidget-query (bind-or-id property)
+  "Return the value of PROPERTY of BIND-OR-ID twidget."
+  (plist-get (cdr (ewoc-data (twidget--node bind-or-id))) property))
+
+;;;###autoload
 (defmacro twidget-group (&rest body)
   "Return the relative data of twidget group in BODY.
 The first element of the data is a twidget-id list.  
@@ -835,15 +842,18 @@ or a twidget id."
       (apply #'twidget-update (car item) (cdr item)))))
 
 ;;;###autoload
-(defun twidget-delete (bind-or-id)
+(defun twidget-delete (&rest binds-or-ids)
   "Delete the twidget with binded variable or twidget id.
 BIND-OR-ID is either the variable or id."
   (let ((inhibit-read-only t)
-        (node (twidget--node bind-or-id)))
-    ;; delete the overlay when deleting a node.
-    (ov-clear 'twidget-id id)
-    (setq twidget-overlays (ov-in 'twidget-id))
-    (ewoc-delete twidget-ewoc node)))
+        node)
+    (dolist (bind-or-id binds-or-ids)
+      (setq node (twidget--node bind-or-id))
+      ;; delete the overlay when deleting a node.
+      (ov-clear 'twidget-id (plist-get (cdr (ewoc-data node)) :id))
+      (setq twidget-overlays (ov-in 'twidget-id))
+      (ewoc-delete twidget-ewoc node)
+      (set (plist-get (cdr (ewoc-data node)) :bind) nil))))
 
 ;;;###autoload
 (defun twidget-group-create (group &optional next-group)

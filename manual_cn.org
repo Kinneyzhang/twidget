@@ -58,9 +58,29 @@
 
 *** 控件API
 
-    *插入控件*
+    *环境准备*
 
-    创建一个控件使用 =twidget-create= 宏。该宏的第一个参数为控件符号，其余参数为键值对。插入一段纯文本使用 =twidget-insert= 宏。该宏接受一系列的字符串，和 =insert= 用法相同。例：
+    - =with-twidget-buffer (buffer-or-name &rest body)=
+      
+      在指定 BUFFER-OR-NAME buffer 中创建控件。使用 =pop-to-buffer= 弹出buffer。
+
+    - =with-twidget-setup (&rest body)=
+
+      如果需要自己控制 buffer 的行为，使用该宏包裹twidget的代码。
+
+    - =twidget-buffer-setup & twidget-bind-keymap=
+
+      如果不使用 =with-twidget-setup= 宏，需要在 twidget 代码的开头和结尾分别调用上面的两个函数。
+
+    *插入控件*
+    
+    - =twidget-create (twidget &rest args)=
+
+    twidget 是控件symbol，其余参数为键值对。
+
+    - =twidget-insert (&rest args)=
+
+    插入一段纯文本，和 =insert= 用法相同。
 
     #+BEGIN_SRC emacs-lisp
     (defvar habit-freq-title nil)
@@ -90,11 +110,17 @@
         :require t))
     #+END_SRC
 
+    *查询控件属性值*
+
+    - =twidget-query (bind-or-id property)=
+
     *更新控件*
 
-    - twidget-update (bind-or-id &rest properties)
+    一般用于 action 函数中
+    
+    - =twidget-update (bind-or-id &rest properties)=
 
-      更新单个控件。bind-or-id 指被更新的控件的 =:bind= 属性值或 twidget-id(仅开发用)。properties 是一系列需要更新的键值对。例：
+      更新单个控件。bind-or-id 指被更新的控件的 =:bind= 属性值或 twidget-id(仅开发用)。properties 是一系列需要更新的键值对。
 
     #+BEGIN_SRC emacs-lisp
     (defvar twidget-test-editors '("emacs" "vim" "vscode" "sublime text"))
@@ -130,7 +156,7 @@
     #+END_SRC
 
     
-    - twidget-multi-update (&rest twidget-properties)
+    - =twidget-multi-update (&rest twidget-properties)=
 
       更新多个控件。twidget-properties 的形式参考例子。
 
@@ -181,7 +207,66 @@
 
     *删除控件*
 
+    一般用于 action 函数中
+
+    - =twidget-delete (&rest binds-or-ids)=
+
+      bind 指控件绑定的变量，id 指 overlay twidget-id 的值。
+
+    #+BEGIN_SRC emacs-lisp
+    (with-twidget-buffer "*Twidget Test*"
+      (twidget-create 'twidget-choice
+        :bind 'example-num
+        :choices '("1" "2" "3" "4")
+        :format "\nDelete the number [t] item in list."
+        :value '("1") :separator "/"
+        :multiple t)
+      (twidget-create 'twidget-button
+        :value "Delete"
+        :follow-link t
+        :action (lambda (btn)
+                  (let* ((binds (mapcar (lambda (num)
+                                          (intern (format "example-str%s" num)))
+                                        example-num))
+                         (choices (twidget-query 'example-num :choices))
+                         (new-choices
+                          (seq-remove (lambda (num) (member num example-num)) choices)))
+                    (apply #'twidget-delete binds)
+                    (twidget-update 'example-num
+                                    ;; if update :choice, :value should also be updated.
+                                    :value (car new-choices)
+                                    :choices new-choices))))
+      (twidget-insert "\n")
+      (twidget-create 'twidget-text
+        :bind 'example-str1
+        :value "\n  1. this is the 1st item."
+        :plain t)
+      (twidget-create 'twidget-text
+        :bind 'example-str2
+        :value "\n  2. this is the 2nd item."
+        :plain t)
+      (twidget-create 'twidget-text
+        :bind 'example-str3
+        :value "\n  3. this is the 3rd item."
+        :plain t)
+      (twidget-create 'twidget-text
+        :bind 'example-str4
+        :value "\n  4. this is the 4th item."
+        :plain t))
+    #+END_SRC
+
 *** 控件组API
+
+    控件组是由多个控件组合而成的。定义控件组可以复用相同的结构的控件，只更新需要更新的控件组，这对实现复杂的交互很有帮助。
+
+    *定义控件组*
+
+    - =twidget-group (&rest body)=
+
+    #+BEGIN_SRC emacs-lisp
+
+    #+END_SRC
+
 
 ** 说明
    Twidget 目前处于测试开发中，后续 API 可能会有变动。如果使用，请密切关注更新。
