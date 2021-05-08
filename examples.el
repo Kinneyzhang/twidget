@@ -276,6 +276,7 @@ ARGS are the data used to caculate next dates."
 (defvar habit-title nil)
 (defvar habit-title-group
   (twidget-group
+    ;; (twidget-insert "\n\n")
     (twidget-create 'twidget-text
       :bind 'habit-title
       :value "Habit Title")

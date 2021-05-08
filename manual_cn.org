@@ -83,8 +83,6 @@
     插入一段纯文本，和 =insert= 用法相同。
 
     #+BEGIN_SRC emacs-lisp
-    (defvar habit-freq-title nil)
-    (defvar habit-freq-type nil)
     (defvar habit-regular-feq-type '("after-completion" "daily" "weekly" "monthly" "yearly"))
     (defun habit-freq-type-switch (value)
       (message "current type is \"%s\"!" value))
@@ -123,35 +121,32 @@
       更新单个控件。bind-or-id 指被更新的控件的 =:bind= 属性值或 twidget-id(仅开发用)。properties 是一系列需要更新的键值对。
 
     #+BEGIN_SRC emacs-lisp
-    (defvar twidget-test-editors '("emacs" "vim" "vscode" "sublime text"))
-    (defvar twidget-test-editor nil)
-    (defvar twidget-test-string nil)
-
+    (defvar example-editors '("emacs" "vim" "vscode" "sublime text"))
     (with-twidget-buffer "*Twidget Test*"
       (twidget-create 'twidget-choice
-        :bind 'twidget-test-editor
-        :choices twidget-test-editors
+        :bind 'example-editor
+        :choices example-editors
         :format "Editors: [t]"
         :value "emacs"
         :separator "/"
         :action (lambda (value)
                   (twidget-update
-                   'twidget-test-string :value (capitalize value)))
+                   'example-string :value (capitalize value)))
         :require t)
       (twidget-insert "\n\n")
       (twidget-create 'twidget-text
-        :bind 'twidget-test-string
+        :bind 'example-string
         :format "  - [t] is my favorite editor!"
         :value "Emacs"
         :plain t)
       (twidget-create 'twidget-button
         :value "switch"
         :action (lambda (btn)
-                  (let* ((choices twidget-test-editors)
-                         (editor (downcase twidget-test-editor))
+                  (let* ((choices example-editors)
+                         (editor (downcase example-editor))
                          (nth (seq-position choices editor)))
                     (twidget-update
-                     'twidget-test-editor
+                     'example-editor
                      :value (capitalize (nth (% (1+ nth) (length choices)) choices)))))))
     #+END_SRC
 
@@ -161,9 +156,6 @@
       更新多个控件。twidget-properties 的形式参考例子。
 
     #+BEGIN_SRC emacs-lisp
-    (defvar example-editor nil)
-    (defvar example-string nil)
-    (defvar example-link nil)
     (defvar example-editors '("emacs" "vim" "vscode" "sublime text"))
     (defvar example-websites
       '(("emacs" "https://www.gnu.org/software/emacs/")
@@ -264,7 +256,26 @@
     - =twidget-group (&rest body)=
 
     #+BEGIN_SRC emacs-lisp
+    (defvar example-header
+      (twidget-group
+        (twidget-insert "\n")
+        (twidget-create 'twidget-choice
+          :bind 'example-tab
+          :choices '("主页" "关于" "记录" "更多")
+          :format "戈楷旎 [t]"
+          :value "主页"
+          ;;:format (concat (propertize "戈楷旎" 'face 'bold) " [t]") ;; bug!
+          :require t)))
 
+    (defvar example-footer
+      (twidget-group
+        (twidget-insert "\n 2019~2020")))
+
+    (with-twidget-buffer "*twidget test*"
+      (twidget-page-create
+       'example-header
+       ;; 'example-footer
+       ))
     #+END_SRC
 
 

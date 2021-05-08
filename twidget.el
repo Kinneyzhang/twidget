@@ -539,9 +539,9 @@ by adding a 'display' property to the first LETTER of twidget."
 
 (defun twidget-bind-keymap ()
   "Setting keyhint of the first twidget, binding keys and so on."
-  (when-let* ((ol (car (last twidget-overlays)))
-              (beg (ov-beg ol))
-              (id (ov-val ol 'twidget-id))
+  (when-let* ((datas (twidget--update-twidget-data))
+              (id (plist-get (cdr (car datas)) :id))
+              (beg (ov-beg (car (ov-in 'twidget-id id))))
               (data (progn (goto-char beg)
                            (ewoc-data (ewoc-locate twidget-ewoc))))
               (value (progn (goto-char beg)
@@ -550,7 +550,7 @@ by adding a 'display' property to the first LETTER of twidget."
     (setq twidget-value value)
     (setq twidget-active-id id)
     (setq twidget-active-data data)
-    (setq twidget-data (twidget--update-twidget-data))
+    (setq twidget-data datas)
     (twidget-ewoc-refresh twidget-ewoc)
     (twidget-mode 1)
     (twidget--bind-key)
