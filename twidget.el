@@ -881,7 +881,7 @@ the created group is before the BEXT-GROUP."
     (apply #'ewoc-delete twidget-ewoc nodes)))
 
 ;;;###autoload
-(defun twidget-refresh (&rest groups)
+(defun twidget-page-refresh (&rest groups)
   "Refresh the whole twidget buffer according
 to the rest arguments twidget GROUPS.  This command
 only update the groups with changes, such as deleting

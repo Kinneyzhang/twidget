@@ -23,7 +23,7 @@
     | :format | 字符串        | 否   | 完整的控件字符串, 其中用 "[t]" 代表编辑区域                                                        |
     | :action | 函数/函数列表 | 否   | 编辑区域内容更新后触发的行为, 默认参数为当前的value                                                |
     | :plain  | 布尔值        | 否   | 隐藏编辑区域，显示为不可编辑的纯文本(和 twidget-insert 插入的文本不同的是，该区域可以通过代码修改) |
-    | :local  | 布尔值        | 否   | 是否为局部控件, 局部控件在每次刷新(twidget-refresh)时会恢复到原始值                                |
+    | :local  | 布尔值        | 否   | 是否为局部控件, 局部控件在每次刷新(twidget-page-refresh)时会恢复到原始值                                |
     
     *twidget-choice 选择控件*
 
@@ -42,7 +42,7 @@
     | :multiple  | 布尔值        | 否   | 是否为多选, 默认为为单选                                            |
     | :fold      | 布尔值        | 否   | 是否折叠隐藏未选择的选项，默认全部显示                              |
     | :require   | 布尔值        | 否   | 是否至少选中一项，默认非必须                                        |
-    | :local     | 布尔值        | 否   | 是否为局部控件, 局部控件在每次刷新(twidget-refresh)时会恢复到原始值 |
+    | :local     | 布尔值        | 否   | 是否为局部控件, 局部控件在每次刷新(twidget-page-refresh)时会恢复到原始值 |
 
     *twidget-button 按钮控件*
 
@@ -251,33 +251,87 @@
 
     控件组是由多个控件组合而成的。定义控件组可以复用相同的结构的控件，只更新需要更新的控件组，这对实现复杂的交互很有帮助。
 
-    *定义控件组*
+    *定义控件组* =twidget-group (&rest body)=
 
-    - =twidget-group (&rest body)=
+    *创建控件组* =twidget-group-create (group &optional next-group)=
+
+    *删除控件组* =twidget-group-delete (group)=
+
+    *创建所有控件组* =twidget-page-create (&rest groups)=
+
+    *更新所有控件组* =twidget-page-refresh (&rest groups)=
 
     #+BEGIN_SRC emacs-lisp
     (defvar example-header
       (twidget-group
-        (twidget-insert "\n")
         (twidget-create 'twidget-choice
           :bind 'example-tab
           :choices '("主页" "关于" "记录" "更多")
-          :format "戈楷旎 [t]"
-          :value "主页"
-          ;;:format (concat (propertize "戈楷旎" 'face 'bold) " [t]") ;; bug!
+          :format (concat (propertize "戈楷旎" 'face '(bold :height 1.2)) "   [t]")
+          :value "主页" :separator "  "
+          :action 'example-switch-tabs
           :require t)))
+
+    (defun example-switch-tabs (value)
+      (pcase value
+        ("主页" (twidget-page-refresh 'example-header
+                                      'example-index 'example-footer))
+        ("关于" (twidget-page-refresh 'example-header
+                                      'example-about 'example-footer))
+        ("记录" (twidget-page-refresh 'example-header
+                                      'example-diary 'example-footer))
+        ("更多" (twidget-page-refresh 'example-header
+                                      'example-more 'example-footer))))
+
+    (defvar example-index
+      (twidget-group
+        (twidget-insert "\n\n")
+        (twidget-insert "This is the content of index page.")))
+
+    (defvar example-about
+      (twidget-group
+        (twidget-insert "\n\n")
+        (twidget-insert "This is the content of about page.")))
+
+    (defvar example-diary
+      (twidget-group
+        (twidget-insert "\n\n")
+        (twidget-insert "This is the content of diary page.")))
+
+    (defvar example-more
+      (twidget-group
+        (twidget-create 'twidget-choice
+          :bind 'example-more-tabs
+          :choices '("留言" "视频")
+          :format "> [t]"
+          :action 'example-switch-more-tabs
+          :require t)))
+
+    (defun example-switch-more-tabs (value)
+      (pcase value
+        ("留言" (twidget-page-refresh 'example-header 'example-more
+                                      'example-message 'example-footer))
+        ("视频" (twidget-page-refresh 'example-header 'example-more
+                                      'example-video 'example-footer))))
+
+    (defvar example-message
+      (twidget-group
+        (twidget-insert "\n\n")
+        (twidget-insert "This is the content of message page.")))
+
+    (defvar example-video
+      (twidget-group
+        (twidget-insert "\n\n")
+        (twidget-insert "This is the content of video page.")))
 
     (defvar example-footer
       (twidget-group
-        (twidget-insert "\n 2019~2020")))
+        (twidget-insert "\n\n2019-" (format-time-string "%Y")
+                        " 戈楷旎 | Licensed under CC BY-NC-SA | Powered by Django")))
 
     (with-twidget-buffer "*twidget test*"
-      (twidget-page-create
-       'example-header
-       ;; 'example-footer
-       ))
+      (twidget-page-create 'example-header 'example-index 'example-footer))
     #+END_SRC
-
 
 ** 说明
    Twidget 目前处于测试开发中，后续 API 可能会有变动。如果使用，请密切关注更新。

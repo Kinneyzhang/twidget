@@ -288,19 +288,19 @@ ARGS are the data used to caculate next dates."
 (defun habit-freq-type-switch (value)
   (pcase habit-freq-type
     ("after-completion"
-     (twidget-refresh
+     (twidget-page-refresh
       'habit-title-group
       'habit-repeat-type-group
       'habit-after-completion-group))
     ("daily"
-     (twidget-refresh
+     (twidget-page-refresh
       'habit-title-group
       'habit-repeat-type-group
       'habit-interval-group
       'habit-next-dates-group
       'habit-end-type-group))
     ("weekly"
-     (twidget-refresh
+     (twidget-page-refresh
       'habit-title-group
       'habit-repeat-type-group
       'habit-interval-group
@@ -308,7 +308,7 @@ ARGS are the data used to caculate next dates."
       'habit-next-dates-group
       'habit-end-type-group))
     ("monthly"
-     (twidget-refresh
+     (twidget-page-refresh
       'habit-title-group
       'habit-repeat-type-group
       'habit-interval-group
@@ -317,7 +317,7 @@ ARGS are the data used to caculate next dates."
       'habit-next-dates-group
       'habit-end-type-group))
     ("yearly"
-     (twidget-refresh
+     (twidget-page-refresh
       'habit-title-group
       'habit-repeat-type-group
       'habit-interval-group
