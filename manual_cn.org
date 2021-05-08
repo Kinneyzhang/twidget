@@ -76,11 +76,11 @@
     
     - =twidget-create (twidget &rest args)=
 
-    twidget 是控件symbol，其余参数为键值对。
+      twidget 是控件symbol，其余参数为键值对。
 
     - =twidget-insert (&rest args)=
 
-    插入一段纯文本，和 =insert= 用法相同。
+      插入一段纯文本，和 =insert= 用法相同。
 
     #+BEGIN_SRC emacs-lisp
     (defvar habit-regular-feq-type '("after-completion" "daily" "weekly" "monthly" "yearly"))
@@ -251,15 +251,15 @@
 
     控件组是由多个控件组合而成的。定义控件组可以复用相同的结构的控件，只更新需要更新的控件组，这对实现复杂的交互很有帮助。
 
-    *定义控件组* =twidget-group (&rest body)=
+    - =twidget-group (&rest body)= 定义控件组
 
-    *创建控件组* =twidget-group-create (group &optional next-group)=
+    - =twidget-group-create (group &optional next-group)= 创建控件组
 
-    *删除控件组* =twidget-group-delete (group)=
+    - =twidget-group-delete (group)= 删除控件组
 
-    *创建所有控件组* =twidget-page-create (&rest groups)=
+    - =twidget-page-create (&rest groups)= 创建所有控件组
 
-    *更新所有控件组* =twidget-page-refresh (&rest groups)=
+    - =twidget-page-refresh (&rest groups)= 更新所有控件组
 
     #+BEGIN_SRC emacs-lisp
     (defvar example-header
