@@ -805,144 +805,144 @@ Replace the old groups OLD with the new groups NEW"
       (incf j))))
 
 ;;;###autoload
-  (defmacro twidget-create (twidget &rest args)
-    "Create the twidget TWIDGET with ARGS in current buffer.
+(defmacro twidget-create (twidget &rest args)
+  "Create the twidget TWIDGET with ARGS in current buffer.
 ARGS is a series of form of property value pairs."
-    (declare (indent defun))
-    (let ((id (org-id-uuid)))
-      `(twidget--create ,twidget ,@args :id ,id)))
+  (declare (indent defun))
+  (let ((id (org-id-uuid)))
+    `(twidget--create ,twidget ,@args :id ,id)))
 
 ;;;###autoload
-  (defmacro twidget-insert (&rest args)
-    "Insert a a series of ARGS string."
-    (let ((id (org-id-uuid)))
-      `(twidget--insert
-        ,@args :id ,id)))
+(defmacro twidget-insert (&rest args)
+  "Insert a a series of ARGS string."
+  (let ((id (org-id-uuid)))
+    `(twidget--insert
+      ,@args :id ,id)))
 
 ;;;###autoload
-  (defun twidget-query (bind-or-id property)
-    "Return the value of PROPERTY of BIND-OR-ID twidget."
-    (plist-get (cdr (ewoc-data (twidget--node bind-or-id))) property))
+(defun twidget-query (bind-or-id property)
+  "Return the value of PROPERTY of BIND-OR-ID twidget."
+  (plist-get (cdr (ewoc-data (twidget--node bind-or-id))) property))
 
 ;;;###autoload
-  (defmacro twidget-group (bind &rest body)
-    "Return the relative data of twidget group in BODY.
+(defmacro twidget-group (bind &rest body)
+  "Return the relative data of twidget group in BODY.
 The first element of the data is a twidget-id list.  
 The rest of data is a list of codes for creating twidgets."
-    (declare (indent defun))
-    (let* (expanded-body
-           (binds (mapcar
-                   (lambda (code)
-                     (let ((expanded-code (macroexpand code)))
-                       ;; should only expand once for sake of the unique id.
-                       (push expanded-code expanded-body)
-                       (plist-get (cddr expanded-code) :id)))
-                   body))
-           (body (reverse expanded-body)))
-      `(set ,bind (cons ',binds ',body))))
+  (declare (indent defun))
+  (let* (expanded-body
+         (binds (mapcar
+                 (lambda (code)
+                   (let ((expanded-code (macroexpand code)))
+                     ;; should only expand once for sake of the unique id.
+                     (push expanded-code expanded-body)
+                     (plist-get (cddr expanded-code) :id)))
+                 body))
+         (body (reverse expanded-body)))
+    `(set ,bind (cons ',binds ',body))))
 
 ;;;###autoload
-  (defun twidget-update (bind-or-id &rest properties)
-    "Update the properties of twidget with binded variable or
+(defun twidget-update (bind-or-id &rest properties)
+  "Update the properties of twidget with binded variable or
 twidget-id.  BIND-OR-ID is either a binded variable or a twidget-id.
 
 Remaining arguments PROPERTIES is a sequence of property value
 pairs for text properties to update on the node."
-    (twidget--update-twidget (twidget--node bind-or-id) properties))
+  (twidget--update-twidget (twidget--node bind-or-id) properties))
 
 ;;;###autoload
-  (defun twidget-multi-update (&rest twidget-properties)
-    "Update multiple nodes.  Each TWIDGET-PROPERTIES is a form of 
+(defun twidget-multi-update (&rest twidget-properties)
+  "Update multiple nodes.  Each TWIDGET-PROPERTIES is a form of 
 cons cell of twidget properties.  Twidget is either a binded variable
 or a twidget id."
-    (let ((clist (twidget--plist->clist twidget-properties)))
-      (dolist (item clist)
-        (apply #'twidget-update (car item) (cdr item)))))
+  (let ((clist (twidget--plist->clist twidget-properties)))
+    (dolist (item clist)
+      (apply #'twidget-update (car item) (cdr item)))))
 
 ;;;###autoload
-  (defun twidget-delete (&rest binds-or-ids)
-    "Delete the twidget with binded variable or twidget id.
+(defun twidget-delete (&rest binds-or-ids)
+  "Delete the twidget with binded variable or twidget id.
 BIND-OR-ID is either the variable or id."
-    (let ((inhibit-read-only t)
-          node)
-      (dolist (bind-or-id binds-or-ids)
-        (setq node (twidget--node bind-or-id))
-        ;; delete the overlay when deleting a node.
-        (ov-clear 'twidget-id (plist-get (cdr (ewoc-data node)) :id))
-        (setq twidget-overlays (ov-in 'twidget-id))
-        (ewoc-delete twidget-ewoc node)
-        (set (plist-get (cdr (ewoc-data node)) :bind) nil))))
-
-;;;###autoload
-  (defun twidget-group-create (group &optional next-group)
-    "Create a twidget GROUP.  If NEXT-GROUP is non-nil, 
-the created group is before the BEXT-GROUP."
-    (let ((sexps (cdr (symbol-value group)))
-          next-id)
-      (if next-group
-          (progn
-            (setq next-id (caar (symbol-value next-group)))
-            (dolist (sexp sexps)
-              (eval (append sexp `(:next-id ,next-id)))))
-        (dolist (sexp sexps)
-          (eval sexp)))))
-
-;;;###autoload
-  (defun twidget-group-delete (group)
-    "Delete the twidget-group binded with variable GROUP."
-    (let* ((inhibit-read-only t)
-           (ids (car (symbol-value group)))
-           (nodes (mapcar #'twidget--node ids)))
-      (dolist (id ids)
-        (ov-clear 'twidget-id id))
+  (let ((inhibit-read-only t)
+        node)
+    (dolist (bind-or-id binds-or-ids)
+      (setq node (twidget--node bind-or-id))
+      ;; delete the overlay when deleting a node.
+      (ov-clear 'twidget-id (plist-get (cdr (ewoc-data node)) :id))
       (setq twidget-overlays (ov-in 'twidget-id))
-      (apply #'ewoc-delete twidget-ewoc nodes)))
+      (ewoc-delete twidget-ewoc node)
+      (set (plist-get (cdr (ewoc-data node)) :bind) nil))))
 
 ;;;###autoload
-  (defun twidget-page-refresh (&rest groups)
-    "Refresh the whole twidget buffer according
+(defun twidget-group-create (group &optional next-group)
+  "Create a twidget GROUP.  If NEXT-GROUP is non-nil, 
+the created group is before the BEXT-GROUP."
+  (let ((sexps (cdr (symbol-value group)))
+        next-id)
+    (if next-group
+        (progn
+          (setq next-id (caar (symbol-value next-group)))
+          (dolist (sexp sexps)
+            (eval (append sexp `(:next-id ,next-id)))))
+      (dolist (sexp sexps)
+        (eval sexp)))))
+
+;;;###autoload
+(defun twidget-group-delete (group)
+  "Delete the twidget-group binded with variable GROUP."
+  (let* ((inhibit-read-only t)
+         (ids (car (symbol-value group)))
+         (nodes (mapcar #'twidget--node ids)))
+    (dolist (id ids)
+      (ov-clear 'twidget-id id))
+    (setq twidget-overlays (ov-in 'twidget-id))
+    (apply #'ewoc-delete twidget-ewoc nodes)))
+
+;;;###autoload
+(defun twidget-page-refresh (&rest groups)
+  "Refresh the whole twidget buffer according
 to the rest arguments twidget GROUPS.  This command
 only update the groups with changes, such as deleting
 updating or inserting groups."
-    (let ((old-groups twidget-curr-groups)
-          (new-groups groups))
-      (twidget--refresh old-groups new-groups)
-      (setq twidget-curr-groups new-groups)))
+  (let ((old-groups twidget-curr-groups)
+        (new-groups groups))
+    (twidget--refresh old-groups new-groups)
+    (setq twidget-curr-groups new-groups)))
 
 ;;;###autoload
-  (defun twidget-page-create (&rest groups)
-    "Create a twidget page with GROUPS."
-    (mapcar #'twidget-group-create groups)
-    (setq twidget-curr-groups groups))
+(defun twidget-page-create (&rest groups)
+  "Create a twidget page with GROUPS."
+  (mapcar #'twidget-group-create groups)
+  (setq twidget-curr-groups groups))
 
 ;;;###autoload
-  (defmacro with-twidget-setup (&rest body)
-    "Prepare the environment for twidget.
+(defmacro with-twidget-setup (&rest body)
+  "Prepare the environment for twidget.
 Add `twidget-buffer-setup' function before BODY codes and 
 `twidget-bind-keymap' function after BODY codes."
-    `(progn
-       (twidget-buffer-setup)
-       ,@body
-       (twidget-bind-keymap)))
+  `(progn
+     (twidget-buffer-setup)
+     ,@body
+     (twidget-bind-keymap)))
 
 ;;;###autoload
-  (defmacro with-twidget-buffer (buffer-or-name &rest body)
-    "A modified macro of `with-current-buffer' for twidget."
-    (declare (indent defun))
-    `(progn
-       (pop-to-buffer (get-buffer-create ,buffer-or-name))
-       (let ((inhibit-read-only t))
-         (erase-buffer))
-       (with-twidget-setup
-        ,@body)))
+(defmacro with-twidget-buffer (buffer-or-name &rest body)
+  "A modified macro of `with-current-buffer' for twidget."
+  (declare (indent defun))
+  `(progn
+     (pop-to-buffer (get-buffer-create ,buffer-or-name))
+     (let ((inhibit-read-only t))
+       (erase-buffer))
+     (with-twidget-setup
+      ,@body)))
 
 ;;;###autoload
-  (define-minor-mode twidget-mode
-    "Minor mode for text widget."
-    nil nil nil
-    (if twidget-mode
-        (add-hook 'kill-buffer-hook #'twidget--unbind-key nil t)
-      (remove-hook 'kill-buffer-hook #'twidget--unbind-key t)))
+(define-minor-mode twidget-mode
+  "Minor mode for text widget."
+  nil nil nil
+  (if twidget-mode
+      (add-hook 'kill-buffer-hook #'twidget--unbind-key nil t)
+    (remove-hook 'kill-buffer-hook #'twidget--unbind-key t)))
 
-  (provide 'twidget)
+(provide 'twidget)
 ;;; twidget.el ends here
