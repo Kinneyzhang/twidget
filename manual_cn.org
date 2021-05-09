@@ -5,7 +5,6 @@
 
    在介绍具体的API之前，让我们先来一瞥使用 twidget 实现的例子的展示效果：
    
-   
 ** 使用
 *** 基本控件
     Twidget 目前有3个基本控件: =twidget-text=, =twidget-choice= 和 =twidget-button= 。我们可以使用一些统一的函数或宏来创建这些控件并插入到buffer中。每一种控件都有自己的键值对属性，可以通过指定键值对参数来控制其显示效果或行为。
@@ -87,7 +86,7 @@
     (defun habit-freq-type-switch (value)
       (message "current type is \"%s\"!" value))
 
-    (with-twidget-buf "*Twidget Test*"
+    (with-twidget-buffer "*Twidget Test*"
       (twidget-create 'twidget-text
         :bind 'habit-freq-title
         :value "Habit Frequency Selection"
@@ -107,6 +106,8 @@
         ;; :local nil
         :require t))
     #+END_SRC
+    
+    [[./demos/example1.gif]]
 
     *查询控件属性值*
 
@@ -150,6 +151,7 @@
                      :value (capitalize (nth (% (1+ nth) (length choices)) choices)))))))
     #+END_SRC
 
+    [[./demos/example2.gif]]
     
     - =twidget-multi-update (&rest twidget-properties)=
 
@@ -196,6 +198,8 @@
         :value '("emacs" "https://www.gnu.org/software/emacs/")
         :plain t))
     #+END_SRC
+    
+    [[./demos/example3.gif]]
 
     *删除控件*
 
@@ -246,6 +250,8 @@
         :value "\n  4. this is the 4th item."
         :plain t))
     #+END_SRC
+    
+    [[./demos/example4.gif]]
 
 *** 控件组API
 
@@ -262,15 +268,14 @@
     - =twidget-page-refresh (&rest groups)= 更新所有控件组
 
     #+BEGIN_SRC emacs-lisp
-    (defvar example-header
-      (twidget-group
-        (twidget-create 'twidget-choice
-          :bind 'example-tab
-          :choices '("主页" "关于" "记录" "更多")
-          :format (concat (propertize "戈楷旎" 'face '(bold :height 1.2)) "   [t]")
-          :value "主页" :separator "  "
-          :action 'example-switch-tabs
-          :require t)))
+    (twidget-group 'example-header
+      (twidget-create 'twidget-choice
+        :bind 'example-tab
+        :choices '("主页" "关于" "记录" "更多")
+        :format (concat (propertize "戈楷旎" 'face '(bold :height 1.2)) "   [t]")
+        :value "主页" :separator "  "
+        :action 'example-switch-tabs
+        :require t))
 
     (defun example-switch-tabs (value)
       (pcase value
@@ -283,29 +288,25 @@
         ("更多" (twidget-page-refresh 'example-header
                                       'example-more 'example-footer))))
 
-    (defvar example-index
-      (twidget-group
-        (twidget-insert "\n\n")
-        (twidget-insert "This is the content of index page.")))
+    (twidget-group 'example-index
+      (twidget-insert "\n\n")
+      (twidget-insert "This is the content of index page."))
 
-    (defvar example-about
-      (twidget-group
-        (twidget-insert "\n\n")
-        (twidget-insert "This is the content of about page.")))
+    (twidget-group 'example-about
+      (twidget-insert "\n\n")
+      (twidget-insert "This is the content of about page."))
 
-    (defvar example-diary
-      (twidget-group
-        (twidget-insert "\n\n")
-        (twidget-insert "This is the content of diary page.")))
+    (twidget-group 'example-diary
+      (twidget-insert "\n\n")
+      (twidget-insert "This is the content of diary page."))
 
-    (defvar example-more
-      (twidget-group
-        (twidget-create 'twidget-choice
-          :bind 'example-more-tabs
-          :choices '("留言" "视频")
-          :format "> [t]"
-          :action 'example-switch-more-tabs
-          :require t)))
+    (twidget-group 'example-more
+      (twidget-create 'twidget-choice
+        :bind 'example-more-tabs
+        :choices '("留言" "视频")
+        :format "> [t]"
+        :action 'example-switch-more-tabs
+        :require t))
 
     (defun example-switch-more-tabs (value)
       (pcase value
@@ -314,24 +315,23 @@
         ("视频" (twidget-page-refresh 'example-header 'example-more
                                       'example-video 'example-footer))))
 
-    (defvar example-message
-      (twidget-group
-        (twidget-insert "\n\n")
-        (twidget-insert "This is the content of message page.")))
+    (twidget-group 'example-message
+      (twidget-insert "\n\n")
+      (twidget-insert "This is the content of message page."))
 
-    (defvar example-video
-      (twidget-group
-        (twidget-insert "\n\n")
-        (twidget-insert "This is the content of video page.")))
+    (twidget-group 'example-video
+      (twidget-insert "\n\n")
+      (twidget-insert "This is the content of video page."))
 
-    (defvar example-footer
-      (twidget-group
-        (twidget-insert "\n\n2019-" (format-time-string "%Y")
-                        " 戈楷旎 | Licensed under CC BY-NC-SA | Powered by Django")))
+    (twidget-group 'example-footer
+      (twidget-insert "\n\n2019-" (format-time-string "%Y")
+                      " 戈楷旎 | Licensed under CC BY-NC-SA | Powered by Django"))
 
     (with-twidget-buffer "*twidget test*"
       (twidget-page-create 'example-header 'example-index 'example-footer))
     #+END_SRC
+
+    [[./demos/example5.gif]]
 
 ** 说明
    Twidget 目前处于测试开发中，后续 API 可能会有变动。如果使用，请密切关注更新。
