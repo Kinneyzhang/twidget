@@ -1,9 +1,16 @@
-#+TITLE: Twidget - Emacs中的文本控件库（Beta）
+#+TITLE: Twidget - Emacs中的文本控件库
+
+** 目录                                                                 :TOC_3:
+  - [[#介绍][介绍]]
+  - [[#使用][使用]]
+    - [[#基本控件][基本控件]]
+    - [[#控件交互][控件交互]]
+    - [[#控件api][控件API]]
+    - [[#控件组api][控件组API]]
+  - [[#说明][说明]]
 
 ** 介绍
    *Twidget* 的意思是 text widget, 即文本控件库。Emacs有一个 [[https://www.gnu.org/software/emacs/manual/html_mono/widget.html][widget library]]，我使用后感觉不是很好用，并且需要使用鼠标操作。Twidget的设计遵循了简单易用，全键盘操作的理念，并且和 [[https://www.gnu.org/software/emacs/manual/html_node/elisp/Abstract-Display.html][ewoc]] 做了很好的融合，可以轻松创建一个复杂的交互界面。
-
-   在介绍具体的API之前，让我们先来一瞥使用 twidget 实现的例子的展示效果：
    
 ** 使用
 *** 基本控件
@@ -54,6 +61,10 @@
     | :action      | 函数   | 是   | 按钮作用后触发的行为                    |
     | :help-echo   | 字符串 | 否   | 鼠标悬浮在按钮上时的tip，默认无         |
     | :follow-link | 布尔值 | 否   | 按钮是否可用鼠标点击，默认不可          |
+
+*** 控件交互
+    
+    使用 =<tab>= 激活下一个控件, =<shift-tab>= 激活上一个控件。被激活的控件会有数字提示，按数字键进行选择或文本更新，并触发相应的action函数。
 
 *** 控件API
 

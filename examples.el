@@ -88,14 +88,14 @@ ARGS are the data used to caculate next dates."
   (twidget-create 'twidget-text
     :bind 'habit-freq-arg1
     :format "Every [t] week"
-    :action '(habit-plural-unit
-              habit-next-dates-change-by-interval)
+    :action '(habit-plural-unit habit-next-dates-change-by-interval)
     :value "1")
   (twidget-create 'twidget-choice
     :bind 'habit-freq-arg2
     :choices habit-weekdays
     :value '("Monday" "Friday")
     :format "on [t]" :separator "/"
+    ;; :action 
     :fold t :multiple t :require t))
 
 ;; habit-next-dates-change-by-arg

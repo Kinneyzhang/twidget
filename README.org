@@ -12,21 +12,21 @@ Twidget is a text widget library in emacs. It allows you to create plain text wi
    #+END_SRC
 
 ** Main API
-   - twidget-create
-   - twidget-insert
-   - twidget-update
-   - twidget-multi-update
-   - twidget-delete
-   - twidget-group
-   - twidget-group-create
-   - twidget-group-delete
-   - twidget-page-refresh
-   - twidget-page-create
+   - =with-twidget-buffer (buffer-or-name &rest body)=
+   - =with-twidget-setup (&rest body)=
+   - =twidget-create (twidget &rest args)=
+   - =twidget-insert (&rest args)=
+   - =twidget-query (bind-or-id property)=
+   - =twidget-update (bind-or-id &rest properties)=
+   - =twidget-multi-update (&rest twidget-properties)=
+   - =twidget-delete (&rest binds-or-ids)=
+   - =twidget-group (&rest body)=
+   - =twidget-group-create (group &optional next-group)=
+   - =twidget-group-delete (group)=
+   - =twidget-page-create (&rest groups)=
+   - =twidget-page-refresh (&rest groups)=
 
-   See [[./manual_cn.org]] for more details.
-
-** Examples
-   See examples in [[./examples.el]].
+   Read [[./manual_cn.org][manual_cn.org]] for the details of each api and the examples.
 
 ** License
    Copyright © Kinney Zhang and contributors. Distributed under the [[./LICENSE][GPL v3.0]].

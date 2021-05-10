@@ -758,6 +758,11 @@ PROPERTIES is a sequence of PROPERTY VALUE pairs."
           (_ (dolist (func action)
                (funcall func value))))))))
 
+;; (defun twidget--preprocess-binding (groups)
+;;   "Bind the default value to variable for GROUPS."
+;;   )
+;; set all variable before insert twidget in buffer.
+
 (defun twidget--refresh (old new)
   "Update ewoc nodos With the minimum cost.
 Replace the old groups OLD with the new groups NEW"
