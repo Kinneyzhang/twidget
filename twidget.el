@@ -35,8 +35,10 @@
 (require 'ov)
 (require 'ewoc)
 (require 'org-id)
-(require 'emacsql)
-(require 'emacsql-sqlite3)
+(package-installed-p 'emacsql
+                     (require 'emacsql)
+                     (require 'emacsql-sqlite3))
+
 
 ;;;; Variables
 
@@ -990,47 +992,48 @@ Add `twidget-buffer-setup' function before BODY codes and
      (with-twidget-setup
       ,@body)))
 
+(package-installed-p 'emacsql
 ;;;###autoload
-(defmacro twidget-db (file &rest args)
-  "Implement some functions of sqlite3 database.
-FILE is the filename of database.  ARGS are a list of 
+                     (defmacro twidget-db (file &rest args)
+                       "Implement some functions of sqlite3 database.
+FILE is the filename of database.  ARGS are a list of
 property value forms.  Now supported properties are ':prefix'
 and ':tables' and they are necessary.
 
 The value of ':prefix' is the prefix of db function '<prefix>-db'
-and '<prefix>-db-action'.  The value of ':tables' should obey the 
+and '<prefix>-db-action'.  The value of ':tables' should obey the
 form of emacsql table.
 See 'https://github.com/skeeto/emacsql#example-usage' for table form."
-  (declare (indent defun))
-  (let* ((name "twidget-db")
-         (tables (plist-get args :tables))
-         (prefix (plist-get args :prefix))
-         (conn (intern (concat prefix "--connection")))
-         (db-func (intern (concat prefix "-db")))
-         (action-func (intern (concat prefix "-db-action"))))
-    `(progn
-       (defvar ,conn (make-hash-table :test #'equal))
-       (defun ,db-func ()
-         "Entrypoint to the sqlite database.  Initializes and
+                       (declare (indent defun))
+                       (let* ((name "twidget-db")
+                              (tables (plist-get args :tables))
+                              (prefix (plist-get args :prefix))
+                              (conn (intern (concat prefix "--connection")))
+                              (db-func (intern (concat prefix "-db")))
+                              (action-func (intern (concat prefix "-db-action"))))
+                         `(progn
+                            (defvar ,conn (make-hash-table :test #'equal))
+                            (defun ,db-func ()
+                              "Entrypoint to the sqlite database.  Initializes and
 stores the database, and the database connection."
-         (unless (and (gethash ,name ,conn)
-                      (emacsql-live-p (gethash ,name ,conn)))
-           (let ((init-db (not (file-exists-p ,file))))
-             (make-directory (file-name-directory ,file) t)
-             (let ((conn (emacsql-sqlite3 ,file)))
-               (set-process-query-on-exit-flag (emacsql-process conn) nil)
-               (puthash ,name conn ,conn)
-               (when init-db
-                 (emacsql-with-transaction conn
-                   (pcase-dolist (`(,table . ,schema) ,tables)
-                     (emacsql conn `[:create-table ,table ,schema])))))))
-         (gethash ,name ,conn))
-       (defun ,action-func (sql &rest args)
-         "Run SQL query on Gtd database with ARGS.  SQL can be 
+                              (unless (and (gethash ,name ,conn)
+                                           (emacsql-live-p (gethash ,name ,conn)))
+                                (let ((init-db (not (file-exists-p ,file))))
+                                  (make-directory (file-name-directory ,file) t)
+                                  (let ((conn (emacsql-sqlite3 ,file)))
+                                    (set-process-query-on-exit-flag (emacsql-process conn) nil)
+                                    (puthash ,name conn ,conn)
+                                    (when init-db
+                                      (emacsql-with-transaction conn
+                                                                (pcase-dolist (`(,table . ,schema) ,tables)
+                                                                  (emacsql conn `[:create-table ,table ,schema])))))))
+                              (gethash ,name ,conn))
+                            (defun ,action-func (sql &rest args)
+                              "Run SQL query on Gtd database with ARGS.  SQL can be
 either the emacsql vector representation, or a string."
-         (if  (stringp sql)
-             (emacsql (,db-func) (apply #'format sql args))
-           (apply #'emacsql (,db-func) sql args))))))
+                              (if  (stringp sql)
+                                  (emacsql (,db-func) (apply #'format sql args))
+                                (apply #'emacsql (,db-func) sql args)))))))
 
 ;;;###autoload
 (define-minor-mode twidget-mode
