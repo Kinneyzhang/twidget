@@ -852,14 +852,16 @@ Replace the old groups OLD with the new groups NEW"
       (twidget-group-create (nth j new))
       (incf j))))
 
-(require 'promise)
+(when (package-installed-p 'promise)
+  (require 'promise)
+  (defun twidget--id-promise ()
+    "Return twidget id promise."
+    (promise-new
+     (lambda (resolve _reject)
+       (let ((id (org-id-uuid)))
+         (funcall resolve id))))))
 
-(defun twidget--id-promise ()
-  "Return twidget id promise."
-  (promise-new
-   (lambda (resolve _reject)
-     (let ((id (org-id-uuid)))
-       (funcall resolve id)))))
+
 
 ;;;###autoload
 (defmacro twidget-create (twidget &rest args)
