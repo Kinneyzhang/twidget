@@ -214,7 +214,6 @@ ARGS are the data used to caculate next dates."
      (let* ((format-str "")
             (week-num (string-to-number (nth 0 args)))
             (selected-weekdays (nth 1 args))
-            (_ (message "weekdays:%S" selected-weekdays))
             (selected-nths
              (mapcar #'1+ (mapcar
                            (lambda (weekday)
@@ -276,41 +275,28 @@ ARGS are the data used to caculate next dates."
     :format "Ends: [t]" :value "never"
     :local t :require t :fold t))
 
-;;==============================
-;; test global twidget
-(twidget-group 'habit-title-group
-  (twidget-create 'twidget-text
-    :bind 'habit-title
-    :value "Habit Title")
-  (twidget-insert "\n\n"))
-;;==============================
-
 ;; action functions
 
 (defun habit-freq-type-switch (value)
   (pcase habit-freq-type
     ("after-completion"
      (twidget-page-refresh
-      'habit-title-group
       'habit-repeat-type-group
       'habit-after-completion-group))
     ("daily"
      (twidget-page-refresh
-      'habit-title-group
       'habit-repeat-type-group
       'habit-daily-specific-group
       'habit-next-dates-group
       'habit-end-type-group))
     ("weekly"
      (twidget-page-refresh
-      'habit-title-group
       'habit-repeat-type-group
       'habit-weekly-specific-group
       'habit-next-dates-group
       'habit-end-type-group))
     ("monthly"
      (twidget-page-refresh
-      'habit-title-group
       'habit-repeat-type-group
       'habit-monthly-specific-group
       'habit-add-remove-button-group
@@ -318,7 +304,6 @@ ARGS are the data used to caculate next dates."
       'habit-end-type-group))
     ("yearly"
      (twidget-page-refresh
-      'habit-title-group
       'habit-repeat-type-group
       'habit-yearly-specific-group
       'habit-add-remove-button-group
@@ -345,6 +330,5 @@ ARGS are the data used to caculate next dates."
 
 (with-twidget-buffer "*twidget test*"
   (twidget-page-create
-   'habit-title-group
    'habit-repeat-type-group
    'habit-after-completion-group))

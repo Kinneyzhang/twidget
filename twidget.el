@@ -35,6 +35,8 @@
 (require 'ov)
 (require 'ewoc)
 (require 'org-id)
+(require 'emacsql)
+(require 'emacsql-sqlite3)
 
 ;;;; Variables
 
@@ -113,7 +115,7 @@
 
 (defun twidget--prop-value (prop1 value1 plst prop2)
   "Return the value of PROP2 in PLST with
-PROP2 whose value is VALUE1."
+PROP1 whose value is VALUE1."
   (plist-get
    (cdr (seq-find (lambda (item)
                     (equal (plist-get (cdr item) prop1) value1))
@@ -200,6 +202,12 @@ by adding a 'display' property to the first LETTER of twidget."
        (number-to-string num)))
     (_ (error "the length of choices is too large!"))))
 
+(defun twidget--filter-codes (code-lst)
+  "Filter the codes with `twidget--create' in CODE-LST."
+  (seq-filter (lambda (code)
+                (eq (car code) 'twidget--create))
+              code-lst))
+
 
 ;;; twidget component functions
 
@@ -225,7 +233,8 @@ by adding a 'display' property to the first LETTER of twidget."
          (if format
              (progn
                (dotimes (i len)
-                 (setq beg (+ (point) (string-match (format "\\[t%s\\]" i) format)))
+                 (setq beg (+ (point) (string-match (format "\\[t%s\\]" i)
+                                                    format)))
                  (setq end (+ beg (length (nth i value))))
                  (push (cons beg end) alst)
                  (pcase i
@@ -758,24 +767,56 @@ PROPERTIES is a sequence of PROPERTY VALUE pairs."
           (_ (dolist (func action)
                (funcall func value))))))))
 
-;; (defun twidget--preprocess-binding (groups)
-;;   "Bind the default value to variable for GROUPS."
-;;   )
-;; set all variable before insert twidget in buffer.
+(defun twidget--group-data (group)
+  "Return a list of all bind-value-local list in GROUP."
+  (let* ((codes (cdr (symbol-value group)))
+         (twidget-codes (twidget--filter-codes codes)))
+    (mapcar (lambda (code)
+              ;; (message "type:%s" (type-of (plist-get (cddr code) :value)))
+              ;; (message "value:%S" (plist-get (cddr code) :value))
+              (list (cadr (plist-get (cddr code) :bind))
+                    (plist-get (cddr code) :value)
+                    (plist-get (cddr code) :local)))
+            twidget-codes)))
+
+;; (defun twidget--refresh-preprocess (old new)
+;;   "Preprocess the binded variable before create twidgets."
+;;   (let ((len1 (length old)) (len2 (length new)) (i 0) (j 0))
+;;     (while (< i len1)
+;;       (if (eq (nth i old) (nth j new))
+;;           (let ((datas (twidget--group-data (nth i old))))
+;;             (dolist (data datas)
+;;               ;; If local, bind the original value.
+;;               ;; Otherwise, bind the real value already.
+;;               (if (nth 2 data) ;; local-p
+;;                   (set (nth 0 data) (nth 1 data))))
+;;             (incf i)
+;;             (incf j))
+;;         (if (not (member (nth i old) new))
+;;             (let ((datas (twidget--group-data (nth i old))))
+;;               ;; Bind all values to nil if the twidget is gonna be deleted.
+;;               (dolist (data datas) (set (nth 0 data) nil))
+;;               (incf i))
+;;           ;; Bind value for the new twidget.
+;;           (let ((datas (twidget--group-data (nth j new))))
+;;             (dolist (data datas) (set (nth 0 data) (nth 1 data))))
+;;           (incf j))))
+;;     (while (< j len2)
+;;       (let ((datas (twidget--group-data (nth j new))))
+;;         (dolist (data datas) (set (nth 0 data) (nth 1 data))))
+;;       (incf j))))
 
 (defun twidget--refresh (old new)
   "Update ewoc nodos With the minimum cost.
 Replace the old groups OLD with the new groups NEW"
+  ;; (twidget--refresh-preprocess old new)
   (let ((len1 (length old))
         (len2 (length new))
         (i 0) (j 0))
     (while (< i len1)
       (if (eq (nth i old) (nth j new))
-          (let* ((codes (symbol-value (nth i old)))
-                 (twidget-codes (seq-filter
-                                 (lambda (code)
-                                   (eq (car code) 'twidget--create))
-                                 codes))
+          (let* ((codes (cdr (symbol-value (nth i old))))
+                 (twidget-codes (twidget--filter-codes codes))
                  (datas (mapcar #'cdr twidget-codes)))
             (dolist (data datas)
               (let* ((plst (cdr data))
@@ -809,6 +850,15 @@ Replace the old groups OLD with the new groups NEW"
       (twidget-group-create (nth j new))
       (incf j))))
 
+(require 'promise)
+
+(defun twidget--id-promise ()
+  "Return twidget id promise."
+  (promise-new
+   (lambda (resolve _reject)
+     (let ((id (org-id-uuid)))
+       (funcall resolve id)))))
+
 ;;;###autoload
 (defmacro twidget-create (twidget &rest args)
   "Create the twidget TWIDGET with ARGS in current buffer.
@@ -821,8 +871,7 @@ ARGS is a series of form of property value pairs."
 (defmacro twidget-insert (&rest args)
   "Insert a a series of ARGS string."
   (let ((id (org-id-uuid)))
-    `(twidget--insert
-      ,@args :id ,id)))
+    `(twidget--insert ,@args :id ,id)))
 
 ;;;###autoload
 (defun twidget-query (bind-or-id property)
@@ -940,6 +989,48 @@ Add `twidget-buffer-setup' function before BODY codes and
        (erase-buffer))
      (with-twidget-setup
       ,@body)))
+
+;;;###autoload
+(defmacro twidget-db (file &rest args)
+  "Implement some functions of sqlite3 database.
+FILE is the filename of database.  ARGS are a list of 
+property value forms.  Now supported properties are ':prefix'
+and ':tables' and they are necessary.
+
+The value of ':prefix' is the prefix of db function '<prefix>-db'
+and '<prefix>-db-action'.  The value of ':tables' should obey the 
+form of emacsql table.
+See 'https://github.com/skeeto/emacsql#example-usage' for table form."
+  (declare (indent defun))
+  (let* ((name "twidget-db")
+         (tables (plist-get args :tables))
+         (prefix (plist-get args :prefix))
+         (conn (intern (concat prefix "--connection")))
+         (db-func (intern (concat prefix "-db")))
+         (action-func (intern (concat prefix "-db-action"))))
+    `(progn
+       (defvar ,conn (make-hash-table :test #'equal))
+       (defun ,db-func ()
+         "Entrypoint to the sqlite database.  Initializes and
+stores the database, and the database connection."
+         (unless (and (gethash ,name ,conn)
+                      (emacsql-live-p (gethash ,name ,conn)))
+           (let ((init-db (not (file-exists-p ,file))))
+             (make-directory (file-name-directory ,file) t)
+             (let ((conn (emacsql-sqlite3 ,file)))
+               (set-process-query-on-exit-flag (emacsql-process conn) nil)
+               (puthash ,name conn ,conn)
+               (when init-db
+                 (emacsql-with-transaction conn
+                   (pcase-dolist (`(,table . ,schema) ,tables)
+                     (emacsql conn `[:create-table ,table ,schema])))))))
+         (gethash ,name ,conn))
+       (defun ,action-func (sql &rest args)
+         "Run SQL query on Gtd database with ARGS.  SQL can be 
+either the emacsql vector representation, or a string."
+         (if  (stringp sql)
+             (emacsql (,db-func) (apply #'format sql args))
+           (apply #'emacsql (,db-func) sql args))))))
 
 ;;;###autoload
 (define-minor-mode twidget-mode
