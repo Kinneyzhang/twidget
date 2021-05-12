@@ -45,6 +45,10 @@
   "Text widget library."
   :group nil)
 
+(defface twidget-text-area-face
+  '((t :background "#eee" :box (:color "#ccc")))
+  "Face for the text area.")
+
 (defface twidget-choice-selected-face
   '((t :inherit font-lock-function-name-face :bold t))
   "Face for the selected choice.")
@@ -95,13 +99,13 @@
 (defvar-local twidget-data nil
   "The ewoc data of all twidgets.")
 
+(defvar-local twidget-overlays nil
+  "List of overlays in twidget buffer.")
+
 ;; (defvar twidget-number-symbols
 ;;   '("⓪" "①" "②" "③" "④" "⑤" "⑥"
 ;;     "⑦" "⑧" "⑨" "⑩" "⑪" "⑫" "⑬"
 ;;     "⑭" "⑮" "⑯" "⑰" "⑱" "⑲" "⑳"))
-
-(defvar-local twidget-overlays nil
-  "List of overlays in twidget buffer.")
 
 ;;;; Functions
 
@@ -218,11 +222,17 @@ by adding a 'display' property to the first LETTER of twidget."
 ;; macro or function to customize a twidget.
 ;; basic twidgets and inherited twidgets.
 
+(defvar twidget-text-dafault-length 5
+  "The displayed length of text area in twidget-text twidget.")
+
 (defun twidget-text (&rest args)
   "Printer function for 'text' twidget with arguments ARGS."
   (let* ((id (plist-get args :id))
          (bind (plist-get args :bind))
-         (value (or (plist-get args :value) " "))
+         (length (or (plist-get args :length)
+                     twidget-text-dafault-length))
+         (value (or (plist-get args :value)
+                    (make-string length ? )))
          (val-len (length value))
          (format (plist-get args :format))
          (plain (plist-get args :plain))
@@ -262,8 +272,9 @@ by adding a 'display' property to the first LETTER of twidget."
            (unless plain
              ;; add face properties
              (with-silent-modifications
-               (add-text-properties beg end '(face (twidget-choice-selected-face
-                                                    :background "#eee"))))
+               (add-text-properties
+                beg end '(face (twidget-text-area-face
+                                twidget-choice-selected-face))))
              ;; add keyhint
              (when (twidget-active-p id)
                (let ((letter (buffer-substring-no-properties beg (1+ beg))))
@@ -285,8 +296,8 @@ by adding a 'display' property to the first LETTER of twidget."
          ;; add face properties
          (with-silent-modifications
            (add-text-properties twidget-beg twidget-end
-                                '(face (twidget-choice-selected-face
-                                        :background "#eee"))))
+                                '(face (twidget-text-area-face
+                                        twidget-choice-selected-face))))
          ;; add keyhint
          (when (twidget-active-p id)
            (let ((letter (buffer-substring-no-properties
@@ -554,8 +565,8 @@ by adding a 'display' property to the first LETTER of twidget."
 	      (beg (ov-beg (car (ov-in 'twidget-id id))))
 	      (data (progn (goto-char beg)
 			   (ewoc-data (ewoc-locate twidget-ewoc))))
-	      (value (progn (goto-char beg)
-			    (plist-get (cdr data) :value))))
+	      (value t))
+    (setq value (progn (goto-char beg) (plist-get (cdr data) :value)))
     ;; save all twidget data in `twidget-data' variable.
     (setq twidget-value value)
     (setq twidget-active-id id)
