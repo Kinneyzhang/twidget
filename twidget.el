@@ -46,7 +46,7 @@
   :group nil)
 
 (defface twidget-text-area-face
-  '((t :background "#eee" :box (:color "#ccc")))
+  '((t :background "grey95" :box (:color "#ddd")))
   "Face for the text area.")
 
 (defface twidget-choice-selected-face
@@ -101,6 +101,24 @@
 
 (defvar-local twidget-overlays nil
   "List of overlays in twidget buffer.")
+
+(defvar twidget-text-capture-buf "*Twidget Text Capture*"
+  "Buffer name of twidget textarea.")
+
+(defvar twidget-return-window-conf nil
+  "Saved window configuration.")
+
+(defvar twidget-text-dafault-length 8
+  "The displayed length of text area in twidget-text twidget.")
+
+(defvar twidget-textarea-dafault-length 30)
+
+(defvar-local twidget-capture-value-nth nil
+  "The pos of element in the `twidget-value' list.
+This variable is used in `twidget-text-capture-buf'.")
+
+(defvar-local twidget-capture-value-num nil
+  "The number of values of `twidget-value' list.")
 
 ;; (defvar twidget-number-symbols
 ;;   '("⓪" "①" "②" "③" "④" "⑤" "⑥"
@@ -218,93 +236,109 @@ by adding a 'display' property to the first LETTER of twidget."
 
 ;; text twidget
 
-;; Ideas:
-;; macro or function to customize a twidget.
-;; basic twidgets and inherited twidgets.
+;; for twidget-text
+;; if format is nil, it ups to value
+;; if format is non-nil, it ups to format
 
-(defvar twidget-text-dafault-length 5
-  "The displayed length of text area in twidget-text twidget.")
+;; case1 - :format nil, :value (nil/string/list)->list
+;; case2 - :format ..[t].., :value (nil/string)->list
+;; case3 - :format ..[t0].., :value (nil/string/list)->list
+
+(defun twidget-text-add-face-and-keyhint (alst plain id textarea)
+  (dotimes (i (length alst))
+    (setq beg (car (nth i alst)))
+    (setq end (cdr (nth i alst)))
+    (unless plain
+      ;; add face properties
+      (with-silent-modifications
+        (if textarea
+            (add-text-properties
+             beg end `(face (twidget-choice-selected-face
+                             :background "grey95")
+                            line-prefix "▎"  wrap-prefix "▎"))
+          (add-text-properties
+           beg end '(face (twidget-text-area-face
+                           twidget-choice-selected-face)))))
+      ;; add keyhint
+      (when (twidget-active-p id)
+        (let ((letter (buffer-substring-no-properties beg (1+ beg))))
+          (twidget--add-keyhint-face beg (format "%s" (1+ i)) letter))))))
 
 (defun twidget-text (&rest args)
   "Printer function for 'text' twidget with arguments ARGS."
   (let* ((id (plist-get args :id))
          (bind (plist-get args :bind))
+         (textarea (plist-get args :textarea))
          (length (or (plist-get args :length)
-                     twidget-text-dafault-length))
-         (value (or (plist-get args :value)
-                    (make-string length ? )))
-         (val-len (length value))
+                     (if textarea
+                         twidget-textarea-dafault-length
+                       twidget-text-dafault-length)))
+         ;; always make value a list to simplify the code.
+         (value (plist-get args :value))
+         (value (or (when value
+                      (if (listp value) value (list value)))
+                    (if textarea
+                        (list (make-string length ? ))
+                      (list (make-string length ? )))))
          (format (plist-get args :format))
          (plain (plist-get args :plain))
-         twidget-beg twidget-end)
-    (pcase value
-      ((pred listp)
-       (let ((len (length value))
-             beg end alst)
-         (if format
-             (progn
-               (dotimes (i len)
-                 (setq beg (+ (point) (string-match (format "\\[t%s\\]" i)
-                                                    format)))
-                 (setq end (+ beg (length (nth i value))))
-                 (push (cons beg end) alst)
-                 (pcase i
-                   (0 (setq twidget-beg beg))
-                   ((pred (= (1- len)))
-                    (setq twidget-end end)))
-                 (setq format (replace-regexp-in-string (format "\\[t%s\\]" i)
-                                                        (nth i value) format t)))
-               (insert format " "))
-           (setq twidget-beg (point))
-           (dotimes (i len)
-             (setq beg (point))
-             (insert (nth i value) " ")
-             (setq end (point))
-             (push (cons beg end) alst)
-             (pcase i
-               (0 (setq twidget-beg beg))
-               ((pred (= (1- len)))
-                (setq twidget-end end)))))
+         beg end alst twidget-beg twidget-end)
+    (pcase format
+      ((pred null)
+       (let ((lst-len (length value)))
+         (dotimes (i lst-len)
+           (setq beg (point))
+           (setq end (+ beg (length (nth i value))))
+           (if textarea
+               (if (= i (1- lst-len))
+                   (insert (nth i value))
+                 (insert (nth i value) "\n"))
+             (insert (nth i value) " "))
+           (push (cons beg end) alst))
          (setq alst (reverse alst))
-         (dotimes (i len)
-           (setq beg (car (nth i alst)))
-           (setq end (cdr (nth i alst)))
-           (unless plain
-             ;; add face properties
-             (with-silent-modifications
-               (add-text-properties
-                beg end '(face (twidget-text-area-face
-                                twidget-choice-selected-face))))
-             ;; add keyhint
-             (when (twidget-active-p id)
-               (let ((letter (buffer-substring-no-properties beg (1+ beg))))
-                 (twidget--add-keyhint-face beg (format "%s" (1+ i)) letter)))))))
-      (_
-       (if format
-           (progn
-             (setq twidget-beg (+ (point) (string-match "\\[t\\]" format)))
-             (setq twidget-end (+ twidget-beg val-len))
-             ;; leave one blank after each twidget
-             ;; for sake of jumping back correctly
-             (insert (replace-regexp-in-string "\\[t\\]" value format t) " "))
-         (setq twidget-beg (point))
-         (setq twidget-end (+ val-len twidget-beg))
-         ;; leave one blank after each twidget
-         ;; for sake of jumping back correctly
-         (insert value " "))
-       (unless plain
-         ;; add face properties
-         (with-silent-modifications
-           (add-text-properties twidget-beg twidget-end
-                                '(face (twidget-text-area-face
-                                        twidget-choice-selected-face))))
-         ;; add keyhint
-         (when (twidget-active-p id)
-           (let ((letter (buffer-substring-no-properties
-                          twidget-beg (1+ twidget-beg))))
-             (twidget--add-keyhint-face twidget-beg "1" letter))))))
+         (setq twidget-beg (caar alst))
+         (setq twidget-end (cdar (last alst)))
+         (twidget-text-add-face-and-keyhint alst plain id textarea)))
+      (_ (let ((pos 0))
+           (when textarea
+             (setq format (twidget-textarea-format format)))
+           (while (and (< pos (length format))
+                       (string-match "\\[t[0-9]*\\]" format pos))
+             (let* ((match-beg (match-beginning 0))
+                    (str (match-string 0 format))
+                    (i (string-to-number (string-trim str "\\[t" "\\]")))
+                    (val (or (nth i value) (make-string length ? )))
+                    (len (length val)))
+               (setq beg (+ (point) match-beg))
+               (setq end (+ beg len))
+               (push (cons beg end) alst)
+               (setq format (replace-regexp-in-string
+                             (regexp-quote str) val format t))
+               (setq pos (+ match-beg len))))
+           (insert format " ")
+           (setq alst (reverse alst))
+           (setq twidget-beg (caar alst))
+           (setq twidget-end (cdar (last alst)))
+           (twidget-text-add-face-and-keyhint alst plain id textarea))))
     ;; add twidget-id overlay
     (twidget-overlay twidget-beg twidget-end 'twidget-id id)))
+
+(defun twidget-textarea-format (format)
+  "Add newline before and after each twidget flag in FORMAT string."
+  (let ((pos 0)
+        (num (if-let ((num (twidget--text-multiple-p format)))
+                 num 1))
+        (n 0))
+    (while (and (< pos (length format))
+                (string-match "\\[t[0-9]*\\]" format pos))
+      (incf n)
+      (let ((end (match-end 0))
+            (str (match-string 0 format)))
+        (if (= n num)
+            (setq format (replace-match (concat "\n" str "\n") t nil format))
+          (setq format (replace-match (concat "\n" str) t nil format)))
+        (setq pos (1+ end))))
+    format))
 
 (defun twidget-text-update-value (value)
   "Update current active text twidget."
@@ -332,6 +366,63 @@ by adding a 'display' property to the first LETTER of twidget."
     (set bind twidget-value)
     (setq twidget-data (twidget--update-twidget-data))
     (goto-char beg)))
+
+(define-minor-mode twidget-text-capture-mode
+  "Minor mode for twidget-text when :textarea is non-nil."
+  nil nil
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'twidget--text-finalize)
+    (define-key map (kbd "C-c C-k") #'twidget--text-cancel)
+    map)
+  (if twidget-text-capture-mode
+      (setq-local header-line-format
+                  (substitute-command-keys
+                   "\\<twidget-text-capture-mode-map>Capture text, finish \
+`\\[twidget--text-finalize]', cancel `\\[twidget--text-cancel]'."))
+    (setq-local header-line-format nil)))
+
+(defun twidget--text-finalize ()
+  "Finalize the twidget textarea inputing."
+  (interactive)
+  (let ((value (buffer-string))
+        (i twidget-capture-value-nth)
+        (num twidget-capture-value-num))
+    (set-window-configuration twidget-return-window-conf)
+    (if i
+        (progn
+          (unless twidget-value
+            (setq twidget-value (make-list num nil)))
+          (when (< (length twidget-value) num)
+            (let ((n (- num (length twidget-value))))
+              (setq twidget-value
+                    (append twidget-value (make-list n 'nil)))))
+          (setf (nth i twidget-value) value))
+      (setq twidget-value value))
+    (twidget-text-update-value twidget-value)
+    (kill-buffer twidget-text-capture-buf)))
+
+(defun twidget--text-cancel ()
+  "Cancel the twidget textarea inputing."
+  (interactive)
+  (set-window-configuration twidget-return-window-conf)
+  (kill-buffer twidget-text-capture-buf))
+
+(defun twidget-text-capture (&optional nth num)
+  "Pop up a side window to capture twidget text.
+If NTH is a number, the twidget-value is a list and
+the current captured text is the NTH position of list.
+NUM is the number of values of current twidget."
+  (let ((value twidget-value))
+    (setq twidget-return-window-conf (current-window-configuration))
+    (display-buffer-in-side-window
+     (get-buffer-create twidget-text-capture-buf) nil)
+    (select-window (get-buffer-window twidget-text-capture-buf))
+    (if nth
+        (when (nth nth value) (insert (nth nth value)))
+      (when value (insert value)))
+    (setq twidget-capture-value-nth nth)
+    (setq twidget-capture-value-num num)
+    (twidget-text-capture-mode 1)))
 
 ;; choice twidget
 
@@ -520,7 +611,13 @@ by adding a 'display' property to the first LETTER of twidget."
        (pcase twidget
 	 ('twidget-text
 	  (let* ((bind (plist-get plst :bind))
-		 (value (plist-get plst :value)))
+                 (format (plist-get plst :format))
+		 (value (plist-get plst :value))
+                 (multiple (twidget--text-multiple-p format)))
+            ;; if multiple values, convert string to list.
+            (when (and multiple (stringp value))
+              (setq value (list value)))
+            (setq plst (plist-put plst :value value))
 	    (apply #'twidget-text plst)
 	    (set bind value)))
 	 ('twidget-choice
@@ -578,35 +675,85 @@ by adding a 'display' property to the first LETTER of twidget."
     (read-only-mode 1)
     (goto-char beg)))
 
+(defun twidget--text-multiple-p (format)
+  "Judge if the twidget-text has multiple values.
+If it's multiple, the format should include some twidget flag
+[t0], [t1]... and return the number of twidget flag.
+If it's not multiple, return nil."
+  (when format
+    (let ((pos 0) (num 0))
+      (while (and (< pos (length format))
+                  (string-match "\\[t[0-9]+\\]" format pos))
+        (incf num)
+        (setq pos (+ (match-beginning 0)
+                     (length (match-string 0 format)))))
+      (unless (= num 0)
+        num))))
+
 (defun twidget--bind-key ()
   "Bind the key of twidget."
   (let ((twidget (car twidget-active-data))
 	(plst (cdr twidget-active-data)))
     (pcase twidget
       ('twidget-text
-       (pcase twidget-value
-	 ((pred listp)
-	  (dotimes (i (length twidget-value))
-	    (define-key twidget-mode-map (kbd (format "%s" (1+ i)))
-	      (lambda ()
-		(interactive)
-		(setf (nth i twidget-value)
-		      (read-from-minibuffer
-		       "Input the value: " (nth i twidget-value)))
-		(twidget-text-update-value twidget-value)))))
-	 (_
-	  (define-key twidget-mode-map (kbd "1")
-	    (lambda ()
-	      (interactive)
-	      (setq twidget-value (read-from-minibuffer
-				   "Input the value: " twidget-value))
-	      (twidget-text-update-value twidget-value))))))
+       (let* ((textarea (plist-get plst :textarea))
+              (format (plist-get plst :format))
+              (lst-num (if (and twidget-value (listp twidget-value))
+                           (length twidget-value) 1)))
+         (pcase format
+           ((pred null)
+            (dotimes (i lst-num)
+	      (define-key twidget-mode-map (kbd (format "%s" (1+ i)))
+                (lambda ()
+		  (interactive)
+                  (if textarea
+                      (if (or (stringp twidget-value) (null twidget-value))
+                          (twidget-text-capture)
+                        (twidget-text-capture i (length twidget-value)))
+                    (if (or (stringp twidget-value) (null twidget-value))
+                        (setq twidget-value
+                              (read-from-minibuffer
+                               "Input the value: " twidget-value))
+                      (setf (nth i twidget-value)
+                            (read-from-minibuffer
+		             "Input the value: " (nth i twidget-value))))
+                    (twidget-text-update-value twidget-value))))))
+           (_ (let ((pos 0)
+                    (multiple-num (twidget--text-multiple-p format)))
+                (while (and (< pos (length format))
+                            (string-match "\\[t[0-9]*\\]" format pos))
+                  (let* ((match-beg (match-beginning 0))
+                         (str (match-string 0 format))
+                         (i (string-to-number (string-trim str "\\[t" "\\]"))))
+                    (define-key twidget-mode-map (kbd (format "%s" (1+ i)))
+                      (lambda ()
+		        (interactive)
+                        (if textarea
+                            (if multiple-num
+                                (twidget-text-capture i multiple-num)
+                              (twidget-text-capture))
+                          (if multiple-num
+                              (progn
+                                (unless twidget-value
+                                  (setq twidget-value (make-list multiple-num nil)))
+                                (when (< (length twidget-value) multiple-num)
+                                  (let ((n (- multiple-num (length twidget-value))))
+                                    (setq twidget-value
+                                          (append twidget-value (make-list n 'nil)))))
+                                (setf (nth i twidget-value)
+                                      (read-from-minibuffer
+		                       "Input the value: " (nth i twidget-value))))
+                            (setq twidget-value
+                                  (read-from-minibuffer
+                                   "Input the value: " twidget-value)))
+                          (twidget-text-update-value twidget-value))))
+                    (setq pos (+ match-beg (length str))))))))))
       ('twidget-choice
        (let* ((require (plist-get plst :require))
 	      (multiple (plist-get plst :multiple))
 	      (choices (plist-get plst :choices))
 	      (len (length choices)))
-	 (dotimes (i len)
+         (dotimes (i len)
 	   (define-key twidget-mode-map
 	     (kbd (twidget--format-number-string len (1+ i)))
 	     (lambda ()
