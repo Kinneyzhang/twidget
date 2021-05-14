@@ -51,7 +51,7 @@
   "Face for the short text.")
 
 (defface twidget-textarea-face
-  '((t :background "grey95"))
+  '((t :background "grey96"))
   "Face for the textarea.")
 
 (defface twidget-choice-selected-face
@@ -258,8 +258,9 @@ by adding a 'display' property to the first LETTER of twidget."
       (with-silent-modifications
         (if textarea
             (add-text-properties
-             beg end '(face twidget-textarea-face
-                            line-prefix "▎" wrap-prefix "▎"))
+             beg end `(face twidget-textarea-face
+                            line-prefix "│"
+                            wrap-prefix "│"))
           (add-text-properties
            beg end '(face twidget-text-face))))
       ;; add keyhint
