@@ -113,10 +113,10 @@
 (defvar twidget-return-window-conf nil
   "Saved window configuration.")
 
-(defvar twidget-text-dafault-length 8
+(defvar twidget-text-default-length 8
   "The displayed length of text area in twidget-text twidget.")
 
-(defvar twidget-textarea-dafault-length 30)
+(defvar twidget-textarea-default-length 30)
 
 (defvar-local twidget-capture-value-nth nil
   "The pos of element in the `twidget-value' list.
@@ -275,8 +275,8 @@ by adding a 'display' property to the first LETTER of twidget."
          (textarea (plist-get args :textarea))
          (length (or (plist-get args :length)
                      (if textarea
-                         twidget-textarea-dafault-length
-                       twidget-text-dafault-length)))
+                         twidget-textarea-default-length
+                       twidget-text-default-length)))
          ;; always make value a list to simplify the code.
          (value (plist-get args :value))
          (value (or (when value
