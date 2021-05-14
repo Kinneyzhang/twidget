@@ -45,9 +45,14 @@
   "Text widget library."
   :group nil)
 
-(defface twidget-text-area-face
-  '((t :background "grey95" :box (:color "#ddd")))
-  "Face for the text area.")
+(defface twidget-text-face
+  '((t :inherit font-lock-function-name-face :bold t
+       :background "grey95" :box (:color "#eee")))
+  "Face for the short text.")
+
+(defface twidget-textarea-face
+  '((t :background "grey95"))
+  "Face for the textarea.")
 
 (defface twidget-choice-selected-face
   '((t :inherit font-lock-function-name-face :bold t))
@@ -253,12 +258,10 @@ by adding a 'display' property to the first LETTER of twidget."
       (with-silent-modifications
         (if textarea
             (add-text-properties
-             beg end `(face (twidget-choice-selected-face
-                             :background "grey95")
-                            line-prefix "▎"  wrap-prefix "▎"))
+             beg end '(face twidget-textarea-face
+                            line-prefix "▎" wrap-prefix "▎"))
           (add-text-properties
-           beg end '(face (twidget-text-area-face
-                           twidget-choice-selected-face)))))
+           beg end '(face twidget-text-face))))
       ;; add keyhint
       (when (twidget-active-p id)
         (let ((letter (buffer-substring-no-properties beg (1+ beg))))
