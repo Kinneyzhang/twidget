@@ -1018,13 +1018,13 @@ Replace the old groups OLD with the new groups NEW"
   "Create the twidget TWIDGET with ARGS in current buffer.
 ARGS is a series of form of property value pairs."
   (declare (indent defun))
-  (let ((id (org-id-uuid)))
+  (let ((id (or (plist-get args :id) (org-id-uuid))))
     `(twidget--create ,twidget ,@args :id ,id)))
 
 ;;;###autoload
 (defmacro twidget-insert (&rest args)
   "Insert a a series of ARGS string."
-  (let ((id (org-id-uuid)))
+  (let ((id (or (plist-get args :id) (org-id-uuid))))
     `(twidget--insert ,@args :id ,id)))
 
 ;;;###autoload
