@@ -7,6 +7,7 @@
     - [[#控件交互][控件交互]]
     - [[#控件api][控件API]]
     - [[#控件组api][控件组API]]
+  - [[#例子][例子]]
   - [[#说明][说明]]
 
 ** 介绍
@@ -22,15 +23,16 @@
 
     主要键值对参数:
 
-    | 属性    | 类型          | 必须 | 含义                                                                                               |
-    |---------+---------------+------+----------------------------------------------------------------------------------------------------|
-    | :bind   | 符号          | 是   | 控件的:value值会绑定到该符号变量中                                                                 |
-    | :value  | 字符串        | 否   | 编辑区域的显示的值                                                                                 |
-    | :format | 字符串        | 否   | 完整的控件字符串, 其中用 "[t]" 代表编辑区域                                                        |
-    | :length | 数字          | 否   | 文本框的长度，默认值是5                                                                            |
-    | :action | 函数/函数列表 | 否   | 编辑区域内容更新后触发的行为, 默认参数为当前的value                                                |
-    | :plain  | 布尔值        | 否   | 隐藏编辑区域，显示为不可编辑的纯文本(和 twidget-insert 插入的文本不同的是，该区域可以通过代码修改) |
-    | :local  | 布尔值        | 否   | 是否为局部控件, 局部控件在每次刷新(twidget-page-refresh)时会恢复到原始值                           |
+    | 属性      | 类型          | 必须 | 含义                                                                                               |
+    |-----------+---------------+------+----------------------------------------------------------------------------------------------------|
+    | :bind     | 符号          | 是   | 控件的:value值会绑定到该符号变量中                                                                 |
+    | :value    | 字符串        | 否   | 编辑区域的显示的值                                                                                 |
+    | :format   | 字符串        | 否   | 完整的控件字符串, 其中用 "[t]" 代表编辑区域 或 "[t0],[t1].." 显示多个编辑区域                               |
+    | :length   | 数字          | 否   | 文本区域的长度，默认值是8                                                                     |
+    | :action   | 函数/函数列表 | 否   | 编辑区域内容更新后触发的行为, 默认参数为当前的value                                                |
+    | :textarea | 布尔值        | 否   | 编辑区域为文本框，输入时在底部弹出 side window，显示时在前后添加换行符                                                     |
+    | :plain    | 布尔值        | 否   | 隐藏编辑区域，显示为不可编辑的纯文本(和 twidget-insert 插入的文本不同的是，该区域可以通过代码修改) |
+    | :local    | 布尔值        | 否   | 是否为局部控件, 局部控件在每次刷新(twidget-page-refresh)时会恢复到原始值                           |
     
     *twidget-choice 选择控件*
 
@@ -344,6 +346,62 @@
     #+END_SRC
 
     [[./demos/example5.gif]]
+
+** 例子
+   - =twidget-text= :format中包含多个控件([t0],[t1],[t2]...)
+
+   #+BEGIN_SRC emacs-lisp
+   (defvar twidget-text-format
+     "Emacs is a family of [t0] that are characterized by their extensibility. The manual for the most widely used variant, [t1], describes it as \"the [t2], [t3], [t4], real-time display editor\". Development of the first Emacs began in the mid-1970s, and work on its direct descendant, GNU Emacs, continues actively as of 2021.")
+
+   (with-twidget-buffer "*Twidget Test*"
+     (set-window-margins (selected-window) 3 3)
+     (twidget-insert
+      (propertize "♨ Twidget Test" 'face '(bold :height 1.4)))
+     (twidget-insert
+      "\n\n" (propertize "Emacs" 'face '(bold :height 1.2))
+      "\n\nFrom Wikipedia, the free encyclopedia\n\n")
+     (twidget-create 'twidget-text
+       :bind 'twidget-test1
+       :format twidget-text-format ;; multiple text widget
+       :value '("text editors" "GNU Emacs" nil nil "self-documenting")
+       :length 5))
+   #+END_SRC
+   
+   [[./demos/twidget-multitext.gif]]
+
+   - =twidget-text= :textarea 为 t
+
+     #+BEGIN_SRC emacs-lisp
+     (defvar notebook-default-content
+       "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.")
+
+     (with-twidget-buffer "*Notebook*"
+       (set-window-margins (selected-window) 3 3)
+       (twidget-insert (propertize "📗 Notebook" 'face '(bold :height 1.5)))
+       (twidget-insert "\n\n")
+       (twidget-create 'twidget-text
+         :bind 'notebook-note-title
+         :format "Note title: [t]"
+         :value "Default title")
+       (twidget-insert "\n\n")
+       (twidget-create 'twidget-text
+         :bind 'notebook-note-content
+         :format "Note content:\n[t]"
+         :value notebook-default-content
+         :textarea t) ;; a textarea widget!
+       (twidget-insert "\n")
+       (twidget-create 'twidget-choice
+         :bind 'notebook-album
+         :choices '("Default" "life" "study")
+         :format "Choose notebook [t] "
+         :separator "/"
+         :value "Default")
+       (twidget-create 'twidget-button
+         :value "Add"))
+     #+END_SRC
+
+     [[./demos/twidget-textarea.gif]]
 
 ** 说明
    Twidget 目前处于测试开发中，后续 API 可能会有变动。如果使用，请密切关注更新。
