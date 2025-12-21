@@ -1,0 +1,17 @@
+# Emacs compiled files
+*.elc
+
+# Emacs backup files
+*~
+\#*\#
+
+# Emacs auto-save files
+.#*
+
+# Emacs desktop files
+.emacs.desktop
+.emacs.desktop.lock
+
+# Package files
+*.tar
+*.zip
