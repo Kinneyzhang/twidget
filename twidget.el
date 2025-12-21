@@ -56,11 +56,10 @@ Key is instance ID, value is instance data plist.")
 
 (defvar twidget-reactive-refs (make-hash-table :test 'eq)
   "Hash table mapping reactive refs to their metadata.
-Key is the ref symbol, value is plist with :value, :watchers, :instances.")
+Key is the ref symbol, value is plist with :value, :watchers, :format-fns.")
 
-(defvar twidget-reactive-texts (make-hash-table :test 'eq)
-  "Hash table storing reactive text regions.
-Key is ref symbol, value is list of (buffer start-marker end-marker format-fn).")
+(defvar twidget-reactive-text-id-counter 0
+  "Counter for generating unique reactive text IDs.")
 
 (defvar twidget--instance-counter 0
   "Counter for generating unique instance IDs.")
@@ -154,74 +153,64 @@ Returns a new ref that auto-updates when dependencies change."
   (when (gethash ref twidget-reactive-refs)
     (remove-variable-watcher ref #'twidget--ref-watcher)
     (remhash ref twidget-reactive-refs)
-    ;; Clean up reactive texts for this ref
-    (remhash ref twidget-reactive-texts)
     (makunbound ref)))
 
 ;;; Reactive Text System
+;;
+;; Uses text properties to identify reactive text regions instead of markers.
+;; Each reactive text has a unique `twidget-text-id` property that links it
+;; to its ref and format function. When a ref changes, we search for all text
+;; with the matching `twidget-ref` property and update it.
+
+(defun twidget--generate-text-id ()
+  "Generate a unique text ID for reactive text tracking."
+  (cl-incf twidget-reactive-text-id-counter)
+  (intern (format "twidget-text-%d" twidget-reactive-text-id-counter)))
 
 (defun twidget--update-reactive-texts (ref newval)
-  "Update all reactive text regions for REF with NEWVAL."
-  (when-let ((regions (gethash ref twidget-reactive-texts)))
-    (dolist (region regions)
-      (let ((buffer (nth 0 region))
-            (start-marker (nth 1 region))
-            (end-marker (nth 2 region))
-            (format-fn (nth 3 region)))
-        (when (and (buffer-live-p buffer)
-                   (marker-buffer start-marker)
-                   (marker-buffer end-marker))
-          (with-current-buffer buffer
-            (let ((inhibit-read-only t)
-                  (new-text (if format-fn
-                                (funcall format-fn newval)
-                              (format "%s" newval)))
-                  (start (marker-position start-marker))
-                  (end (marker-position end-marker)))
-              ;; Preserve text properties from the region
-              (let ((props (when (< start end)
-                             (text-properties-at start))))
-                (save-excursion
-                  (goto-char start)
-                  (delete-region start end)
-                  (insert new-text)
-                  ;; Restore text properties
-                  (when props
-                    (add-text-properties start (+ start (length new-text)) props))
-                  ;; Update end marker
-                  (set-marker end-marker (point)))))))))))
+  "Update all reactive text regions for REF with NEWVAL.
+Searches all buffers for text with `twidget-ref' property matching REF
+and updates them with the new value."
+  (dolist (buf (buffer-list))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (save-excursion
+          (let ((inhibit-read-only t))
+            ;; Search for all text with this ref
+            (goto-char (point-min))
+            (while (let ((match (text-property-search-forward 'twidget-ref ref t)))
+                     (when match
+                       (let* ((start (prop-match-beginning match))
+                              (end (prop-match-end match))
+                              (format-fn (get-text-property start 'twidget-format-fn))
+                              (text-id (get-text-property start 'twidget-text-id))
+                              (other-props (text-properties-at start))
+                              (new-text (if format-fn
+                                            (funcall format-fn newval)
+                                          (format "%s" newval))))
+                         ;; Delete old text and insert new
+                         (goto-char start)
+                         (delete-region start end)
+                         (insert new-text)
+                         ;; Restore all properties on the new text
+                         (add-text-properties start (+ start (length new-text)) other-props))
+                       t)))))))))
 
 (defun twidget-text (ref &optional format-fn)
   "Create reactive text bound to REF.
 FORMAT-FN is optional function to format the value before display.
-Returns a propertized string that will be updated when REF changes."
+Returns a propertized string that will be updated when REF changes.
+The text is identified by a unique `twidget-text-id` property."
   (let* ((value (twidget-ref-value ref))
          (text (if format-fn
                    (funcall format-fn value)
-                 (format "%s" value))))
-    ;; Store format-fn for later use when updating
+                 (format "%s" value)))
+         (text-id (twidget--generate-text-id)))
+    ;; Store format-fn and unique ID for later use when updating
     (propertize text
                 'twidget-ref ref
-                'twidget-format-fn format-fn)))
-
-(defun twidget--register-reactive-text (ref buffer start end format-fn)
-  "Register a reactive text region for REF.
-BUFFER is the buffer, START and END are markers, FORMAT-FN formats value."
-  (let* ((start-marker (if (markerp start)
-                           start
-                         (let ((m (make-marker)))
-                           (set-marker m start buffer)
-                           (set-marker-insertion-type m nil)
-                           m)))
-         (end-marker (if (markerp end)
-                         end
-                       (let ((m (make-marker)))
-                         (set-marker m end buffer)
-                         (set-marker-insertion-type m t)
-                         m)))
-         (region (list buffer start-marker end-marker format-fn))
-         (existing (gethash ref twidget-reactive-texts)))
-    (puthash ref (cons region existing) twidget-reactive-texts)))
+                'twidget-format-fn format-fn
+                'twidget-text-id text-id)))
 
 ;;; Component Definition
 
@@ -307,15 +296,13 @@ PROPS is a plist of text properties to apply."
   "Render ELEMENT into BUFFER. Returns the rendered text length."
   (cond
    ;; Reactive text (propertized string with twidget-ref) - check this first
+   ;; The text properties (twidget-ref, twidget-format-fn, twidget-text-id)
+   ;; are already on the string, so just insert it - no registration needed
    ((and (stringp element)
          (> (length element) 0)
          (get-text-property 0 'twidget-ref element))
-    (let ((start (point))
-          (ref (get-text-property 0 'twidget-ref element))
-          (format-fn (get-text-property 0 'twidget-format-fn element)))
-      (insert element)
-      (twidget--register-reactive-text ref buffer start (point) format-fn)
-      (length element)))
+    (insert element)
+    (length element))
    
    ;; Plain string - insert directly
    ((stringp element)
@@ -429,21 +416,24 @@ Returns markers for start and end of inserted text."
 
 (defun twidget-insert-reactive (ref &optional format-fn props)
   "Insert reactive text for REF at point.
-FORMAT-FN formats the value, PROPS are text properties.
-Returns markers for the inserted text."
+FORMAT-FN formats the value, PROPS are additional text properties.
+The inserted text is marked with `twidget-ref`, `twidget-format-fn`,
+and `twidget-text-id` properties for reactive updates.
+Returns the start and end positions as a cons cell."
   (let* ((value (twidget-ref-value ref))
          (text (if format-fn
                    (funcall format-fn value)
                  (format "%s" value)))
-         (start (point-marker)))
+         (text-id (twidget--generate-text-id))
+         (start (point)))
     (insert text)
-    (when props
-      (add-text-properties (marker-position start) (point) props))
-    (let ((end (point-marker)))
-      (set-marker-insertion-type start nil)
-      (set-marker-insertion-type end t)
-      (twidget--register-reactive-text ref (current-buffer) start end format-fn)
-      (cons start end))))
+    ;; Apply reactive text properties
+    (add-text-properties start (point)
+                         (append (list 'twidget-ref ref
+                                       'twidget-format-fn format-fn
+                                       'twidget-text-id text-id)
+                                 props))
+    (cons start (point))))
 
 (defun twidget-clear-buffer-instances ()
   "Clear all component instances in current buffer."
@@ -467,9 +457,9 @@ Returns markers for the inserted text."
                (makunbound ref)))
            twidget-reactive-refs)
   (clrhash twidget-reactive-refs)
-  (clrhash twidget-reactive-texts)
-  ;; Reset counter
-  (setq twidget--instance-counter 0))
+  ;; Reset counters
+  (setq twidget--instance-counter 0)
+  (setq twidget-reactive-text-id-counter 0))
 
 ;;; tp.el Integration
 

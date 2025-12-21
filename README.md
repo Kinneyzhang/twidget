@@ -20,9 +20,9 @@
 
 ### Core Features
 
-1. **Reactive Text System**: Text that automatically updates when variables change
+1. **Reactive Text System**: Text that automatically updates when variables change, using text properties for identification (like tp.el)
 2. **Component Definition**: Define reusable UI components with setup and render functions
-3. **Incremental Buffer Updates**: Only update changed parts of the buffer
+3. **Incremental Buffer Updates**: Only update changed parts of the buffer by searching for text with reactive properties
 4. **Vue3-style Composition API**: Familiar patterns like `ref`, `computed`, `watch`
 5. **tp.el Integration**: Optional integration with tp.el for reactive text properties
 
@@ -223,7 +223,10 @@ Create reactive text bound to a ref. For use in render functions.
 (twidget-insert-reactive REF &optional FORMAT-FN PROPS)
 ```
 
-Insert reactive text at point. Returns start/end markers.
+Insert reactive text at point. The text is identified by unique text properties
+(`twidget-ref`, `twidget-format-fn`, `twidget-text-id`) rather than buffer positions,
+so it remains reactive even when the buffer is edited.
+Returns start/end positions as a cons cell.
 
 ```elisp
 (twidget-insert-reactive counter
