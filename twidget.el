@@ -183,8 +183,10 @@ and updates them with the new value."
                        (let* ((start (prop-match-beginning match))
                               (end (prop-match-end match))
                               (format-fn (get-text-property start 'twidget-format-fn))
-                              (text-id (get-text-property start 'twidget-text-id))
-                              (other-props (text-properties-at start))
+                              ;; Capture all properties to restore them on the new text
+                              ;; This includes twidget-ref, twidget-format-fn, twidget-text-id
+                              ;; which is intentional to maintain reactivity
+                              (props (text-properties-at start))
                               (new-text (if format-fn
                                             (funcall format-fn newval)
                                           (format "%s" newval))))
@@ -193,7 +195,7 @@ and updates them with the new value."
                          (delete-region start end)
                          (insert new-text)
                          ;; Restore all properties on the new text
-                         (add-text-properties start (+ start (length new-text)) other-props))
+                         (add-text-properties start (+ start (length new-text)) props))
                        t)))))))))
 
 (defun twidget-text (ref &optional format-fn)
