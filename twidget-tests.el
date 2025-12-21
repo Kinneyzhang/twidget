@@ -180,9 +180,9 @@
   "Test resetting all state."
   (twidget-reset)
   (let ((ref (twidget-ref 42)))
-    (should (gethash ref twidget-reactive-refs))
+    (should (twidget-ref-p ref))
     (twidget-reset)
-    (should-not (gethash ref twidget-reactive-refs))))
+    (should-not (twidget-ref-p ref))))
 
 (provide 'twidget-tests)
 ;;; twidget-tests.el ends here

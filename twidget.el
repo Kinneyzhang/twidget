@@ -19,13 +19,18 @@
 ;; text properties and implements reactive text that updates when
 ;; variables change.
 ;;
-;; Features:
-;; - Reactive text: Text that updates when variables change
-;; - Component definition: Define reusable UI components
-;; - Incremental buffer updates: Only update changed parts
-;; - Vue3-style Composition API: setup function, refs, computed values
+;; Key concepts:
+;; - Ref: A reactive variable that triggers updates when changed.
+;; - Reactive text: Text bound to a ref that auto-updates in buffers.
+;; - Component: A reusable UI unit with setup, state, and render functions.
 ;;
-;; Requires Emacs 28.1+ and tp.el
+;; Public API:
+;; - `twidget-ref': Create a reactive reference.
+;; - `twidget-ref-value', `twidget-ref-set': Get/set ref value.
+;; - `twidget-watch', `twidget-computed': React to ref changes.
+;; - `twidget-text': Create reactive text string.
+;; - `define-twidget': Define a component.
+;; - `twidget-render', `twidget-unmount': Render/remove components.
 
 ;;; Code:
 
@@ -33,373 +38,354 @@
 (require 'subr-x)
 (require 'tp)
 
-;;; Variables
+
+;;;; Customization
 
 (defgroup twidget nil
-  "Text Widget Component Library."
+  "Text Widget Component Library for reactive text-based UI."
   :prefix "twidget-"
-  :group 'development)
+  :group 'applications)
 
-(defvar twidget-components (make-hash-table :test 'eq)
-  "Hash table storing all defined components.
-Key is component name (symbol), value is component definition plist.")
 
-(defvar twidget-instances (make-hash-table :test 'eq)
-  "Hash table storing component instances.
-Key is instance ID, value is instance data plist.")
+;;;; Internal Variables
 
-(defvar twidget-reactive-refs (make-hash-table :test 'eq)
-  "Hash table mapping reactive refs to their metadata.
-Key is the ref symbol, value is plist with :value, :watchers, :format-fns.")
+(defvar twidget--components (make-hash-table :test 'eq)
+  "Registry of component definitions.  Key: name, Value: plist.")
 
-(defvar twidget-reactive-text-id-counter 0
-  "Counter for generating unique reactive text IDs.")
+(defvar twidget--instances (make-hash-table :test 'eq)
+  "Registry of component instances.  Key: instance-id, Value: plist.")
 
-(defvar twidget--instance-counter 0
-  "Counter for generating unique instance IDs.")
+(defvar twidget--refs (make-hash-table :test 'eq)
+  "Registry of reactive refs.  Key: ref-symbol, Value: metadata plist.")
 
-(defvar-local twidget-buffer-instances nil
+(defvar twidget--id-counter 0
+  "Counter for generating unique IDs.")
+
+(defvar-local twidget--buffer-instances nil
   "List of component instance IDs in current buffer.")
 
-;;; Reactive System - Core
+;;;; ID Generation
 
-(defun twidget--generate-instance-id ()
-  "Generate a unique instance ID."
-  (cl-incf twidget--instance-counter)
-  (intern (format "twidget-instance-%d" twidget--instance-counter)))
+(defun twidget--next-id (prefix)
+  "Generate a unique ID with PREFIX."
+  (intern (format "%s-%d" prefix (cl-incf twidget--id-counter))))
+
+
+;;;; Reactive Refs
 
 (defun twidget-ref (initial-value &optional name)
   "Create a reactive ref with INITIAL-VALUE.
-NAME is optional symbol name for the ref.
-Returns the ref symbol which can be used to get/set the value."
-  (let* ((ref-name (or name (intern (format "twidget-ref-%d"
-                                            (cl-incf twidget--instance-counter)))))
-         (ref-data (list :value initial-value
-                         :watchers nil
-                         :instances nil)))
-    ;; Store ref metadata
-    (puthash ref-name ref-data twidget-reactive-refs)
-    ;; Define the variable
-    (set ref-name initial-value)
-    ;; Add variable watcher for reactivity
-    (add-variable-watcher ref-name #'twidget--ref-watcher)
-    ref-name))
 
-(defun twidget--ref-watcher (symbol newval operation where)
-  "Watcher function for reactive refs.
-SYMBOL is the ref variable, NEWVAL is new value.
-OPERATION is 'set, WHERE indicates context."
-  (when (and (eq operation 'set)
-             (gethash symbol twidget-reactive-refs))
-    (let ((oldval (symbol-value symbol)))
-      (unless (equal oldval newval)
-        ;; Update reactive text regions
-        (twidget--update-reactive-texts symbol newval)
-        ;; Call registered watchers
-        (twidget--invoke-ref-watchers symbol newval oldval)))))
+A ref is a symbol whose value can be observed for changes.
+When the value changes, all watchers and bound text regions update.
+
+NAME is an optional symbol name; if nil, one is auto-generated.
+Returns the ref symbol.
+
+Example:
+  (setq counter (twidget-ref 0))
+  (twidget-ref-set counter 10)  ; triggers reactive updates"
+  (let ((ref (or name (twidget--next-id "twidget-ref"))))
+    (puthash ref (list :watchers nil) twidget--refs)
+    (set ref initial-value)
+    (add-variable-watcher ref #'twidget--on-ref-change)
+    ref))
+
+(defun twidget-ref-p (symbol)
+  "Return non-nil if SYMBOL is a twidget ref."
+  (and (symbolp symbol) (gethash symbol twidget--refs)))
 
 (defun twidget-ref-value (ref)
-  "Get the current value of REF."
-  (if (gethash ref twidget-reactive-refs)
-      (symbol-value ref)
-    (error "Not a twidget ref: %s" ref)))
+  "Return the current value of REF.
+Signal an error if REF is not a valid twidget ref."
+  (unless (twidget-ref-p ref)
+    (error "Not a twidget ref: %s" ref))
+  (symbol-value ref))
 
 (defun twidget-ref-set (ref value)
-  "Set the value of REF to VALUE."
-  (if (gethash ref twidget-reactive-refs)
-      (set ref value)
-    (error "Not a twidget ref: %s" ref)))
+  "Set REF to VALUE, triggering reactive updates.
+Signal an error if REF is not a valid twidget ref."
+  (unless (twidget-ref-p ref)
+    (error "Not a twidget ref: %s" ref))
+  (set ref value))
+
+(defun twidget-unref (ref)
+  "Destroy REF, removing all watchers and the variable binding."
+  (when (twidget-ref-p ref)
+    (remove-variable-watcher ref #'twidget--on-ref-change)
+    (remhash ref twidget--refs)
+    (makunbound ref)))
+
+(defun twidget--on-ref-change (symbol newval operation _where)
+  "Variable watcher callback for ref changes.
+SYMBOL is the ref, NEWVAL is the new value, OPERATION is the change type."
+  (when (and (eq operation 'set) (twidget-ref-p symbol))
+    (let ((oldval (symbol-value symbol)))
+      (unless (equal oldval newval)
+        (twidget--update-reactive-text symbol newval)
+        (twidget--notify-watchers symbol newval oldval)))))
+
+
+;;;; Ref Watchers
 
 (defun twidget-watch (ref callback)
   "Register CALLBACK to be called when REF changes.
-CALLBACK receives (new-value old-value ref-symbol)."
-  (let ((ref-data (gethash ref twidget-reactive-refs)))
-    (if ref-data
-        (plist-put ref-data :watchers
-                   (cons callback (plist-get ref-data :watchers)))
-      (error "Not a twidget ref: %s" ref))))
 
-(defun twidget--invoke-ref-watchers (ref newval oldval)
-  "Invoke all watchers for REF with NEWVAL and OLDVAL."
-  (when-let ((ref-data (gethash ref twidget-reactive-refs)))
-    (dolist (callback (plist-get ref-data :watchers))
-      (condition-case err
-          (funcall callback newval oldval ref)
-        (error (message "twidget: watcher error for %s: %s" ref err))))))
+CALLBACK is called with arguments (NEW-VALUE OLD-VALUE REF).
+Multiple callbacks can be registered for the same ref.
+
+Example:
+  (twidget-watch counter
+    (lambda (new old _ref)
+      (message \"Changed from %s to %s\" old new)))"
+  (unless (twidget-ref-p ref)
+    (error "Not a twidget ref: %s" ref))
+  (let ((data (gethash ref twidget--refs)))
+    (plist-put data :watchers (cons callback (plist-get data :watchers)))))
+
+(defun twidget--notify-watchers (ref newval oldval)
+  "Call all watchers of REF with NEWVAL and OLDVAL."
+  (dolist (callback (plist-get (gethash ref twidget--refs) :watchers))
+    (condition-case err
+        (funcall callback newval oldval ref)
+      (error (message "twidget: watcher error for %s: %s" ref err)))))
 
 (defun twidget-computed (compute-fn &rest deps)
-  "Create a computed ref from COMPUTE-FN.
-DEPS are the reactive refs this computed value depends on.
-Returns a new ref that auto-updates when dependencies change."
-  (let* ((computed-ref (twidget-ref (funcall compute-fn)))
-         (update-fn (lambda (new _old ref)
-                      ;; Temporarily bind the changed variable to its new value
-                      ;; before recomputing, using cl-progv for dynamic binding
-                      (cl-progv (list ref) (list new)
-                        (twidget-ref-set computed-ref (funcall compute-fn))))))
-    ;; Watch all dependencies
+  "Create a computed ref that derives its value from DEPS.
+
+COMPUTE-FN is called to produce the value.  It's re-evaluated
+whenever any ref in DEPS changes.
+
+Returns a new ref.
+
+Example:
+  (setq doubled (twidget-computed
+                  (lambda () (* 2 (twidget-ref-value counter)))
+                  counter))"
+  (let ((computed (twidget-ref (funcall compute-fn))))
     (dolist (dep deps)
-      (twidget-watch dep update-fn))
-    computed-ref))
+      (twidget-watch dep
+        (lambda (new _old dep-ref)
+          (cl-progv (list dep-ref) (list new)
+            (twidget-ref-set computed (funcall compute-fn))))))
+    computed))
 
-(defun twidget-unref (ref)
-  "Remove a reactive ref and its watchers."
-  (when (gethash ref twidget-reactive-refs)
-    (remove-variable-watcher ref #'twidget--ref-watcher)
-    (remhash ref twidget-reactive-refs)
-    (makunbound ref)))
-
-;;; Reactive Text System
-;;
-;; Uses text properties to identify reactive text regions instead of markers.
-;; Each reactive text has a unique `twidget-text-id` property that links it
-;; to its ref and format function. When a ref changes, we search for all text
-;; with the matching `twidget-ref` property and update it using tp.el APIs.
-
-(defun twidget--generate-text-id ()
-  "Generate a unique text ID for reactive text tracking."
-  (cl-incf twidget-reactive-text-id-counter)
-  (intern (format "twidget-text-%d" twidget-reactive-text-id-counter)))
-
-(defun twidget--update-reactive-texts (ref newval)
-  "Update all reactive text regions for REF with NEWVAL.
-Searches all buffers for text with `twidget-ref' property matching REF
-and updates them with the new value using tp.el's search API."
-  (dolist (buf (buffer-list))
-    (when (buffer-live-p buf)
-      (with-current-buffer buf
-        (save-excursion
-          (let ((inhibit-read-only t))
-            ;; Use tp-search-forward to find all text with this ref
-            (goto-char (point-min))
-            (while (let ((match (tp-search-forward 'twidget-ref ref t)))
-                     (when match
-                       (let* ((start (prop-match-beginning match))
-                              (end (prop-match-end match))
-                              (format-fn (tp-at start 'twidget-format-fn))
-                              ;; Get all properties using tp-at
-                              (props (tp-at start))
-                              (new-text (if format-fn
-                                            (funcall format-fn newval)
-                                          (format "%s" newval))))
-                         ;; Delete old text and insert new
-                         (goto-char start)
-                         (delete-region start end)
-                         (insert new-text)
-                         ;; Use tp-set to restore all properties on the new text
-                         (tp-set start (+ start (length new-text)) props))
-                       t)))))))))
+;;;; Reactive Text
 
 (defun twidget-text (ref &optional format-fn)
-  "Create reactive text bound to REF.
-FORMAT-FN is optional function to format the value before display.
-Returns a propertized string that will be updated when REF changes.
-The text is identified by a unique `twidget-text-id` property."
+  "Create a reactive text string bound to REF.
+
+The returned string will auto-update in buffers when REF changes.
+FORMAT-FN, if provided, transforms the ref value for display.
+
+Returns a propertized string with reactive metadata.
+
+Example:
+  (insert (twidget-text counter (lambda (v) (format \"Count: %d\" v))))"
   (let* ((value (twidget-ref-value ref))
          (text (if format-fn
                    (funcall format-fn value)
-                 (format "%s" value)))
-         (text-id (twidget--generate-text-id)))
-    ;; Use tp-set to apply properties to the string
+                 (format "%s" value))))
     (tp-set text
             'twidget-ref ref
             'twidget-format-fn format-fn
-            'twidget-text-id text-id)))
+            'twidget-text-id (twidget--next-id "twidget-text"))))
 
-;;; Component Definition
+(defun twidget--update-reactive-text (ref newval)
+  "Update all text regions bound to REF with NEWVAL."
+  (dolist (buf (buffer-list))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (twidget--update-text-in-buffer ref newval)))))
+
+(defun twidget--update-text-in-buffer (ref newval)
+  "Update text bound to REF in current buffer with NEWVAL."
+  (save-excursion
+    (let ((inhibit-read-only t))
+      (goto-char (point-min))
+      (while-let ((match (tp-search-forward 'twidget-ref ref t)))
+        (let* ((start (prop-match-beginning match))
+               (end (prop-match-end match))
+               (props (tp-at start))
+               (format-fn (plist-get props 'twidget-format-fn))
+               (new-text (if format-fn
+                             (funcall format-fn newval)
+                           (format "%s" newval))))
+          (goto-char start)
+          (delete-region start end)
+          (insert new-text)
+          (tp-set start (+ start (length new-text)) props))))))
+
+;;;; Component Definition
 
 (cl-defmacro define-twidget (name &key props setup render)
-  "Define a twidget component named NAME.
+  "Define a component named NAME.
 
-PROPS is a list of prop names the component accepts.
-SETUP is a function that receives props and returns reactive state.
-RENDER is a function that receives props and state, returns text/elements.
+PROPS is a list of property names the component accepts.
+SETUP is a function (props) -> state, called once to initialize.
+RENDER is a function (props state) -> vnode, called to produce output.
 
 Example:
   (define-twidget counter
     :props (initial-value)
     :setup (lambda (props)
-             (let ((count (twidget-ref (or (plist-get props :initial-value) 0))))
-               (list :count count)))
-    :render (lambda (props state)
-              (let ((count (plist-get state :count)))
-                (twidget-h
-                  (twidget-text count (lambda (v) (format \"Count: %d\" v)))))))"
+             (list :count (twidget-ref (plist-get props :initial-value))))
+    :render (lambda (_props state)
+              (twidget-text (plist-get state :count))))"
   (declare (indent defun))
-  `(progn
-     (puthash ',name
-              (list :name ',name
-                    :props ',props
-                    :setup ,setup
-                    :render ,render)
-              twidget-components)
-     ',name))
+  `(puthash ',name
+            (list :name ',name :props ',props :setup ,setup :render ,render)
+            twidget--components))
 
 (defun twidget-get-component (name)
-  "Get component definition by NAME."
-  (gethash name twidget-components))
+  "Return the component definition for NAME, or nil if not defined."
+  (gethash name twidget--components))
 
-;;; Component Instance
+;;;; Component Instances
 
 (defun twidget-create-instance (component-name &optional props)
-  "Create an instance of component COMPONENT-NAME with PROPS.
-Returns instance ID."
-  (let* ((component (twidget-get-component component-name))
-         (instance-id (twidget--generate-instance-id))
-         (setup-fn (plist-get component :setup))
-         (state (when setup-fn (funcall setup-fn props))))
+  "Create an instance of COMPONENT-NAME with PROPS.
+Returns the instance ID.  Signals an error if component is undefined."
+  (let ((component (twidget-get-component component-name)))
     (unless component
       (error "Component not defined: %s" component-name))
-    (puthash instance-id
-             (list :id instance-id
-                   :component component-name
-                   :props props
-                   :state state
-                   :mounted nil
-                   :buffer nil
-                   :start-marker nil
-                   :end-marker nil)
-             twidget-instances)
-    instance-id))
+    (let* ((instance-id (twidget--next-id "twidget-instance"))
+           (setup-fn (plist-get component :setup))
+           (state (when setup-fn (funcall setup-fn props))))
+      (puthash instance-id
+               (list :id instance-id
+                     :component component-name
+                     :props props
+                     :state state
+                     :buffer nil
+                     :start-marker nil
+                     :end-marker nil)
+               twidget--instances)
+      instance-id)))
 
 (defun twidget-get-instance (instance-id)
-  "Get instance data by INSTANCE-ID."
-  (gethash instance-id twidget-instances))
+  "Return the instance data for INSTANCE-ID, or nil."
+  (gethash instance-id twidget--instances))
 
 (defun twidget-instance-state (instance-id)
-  "Get the state of instance INSTANCE-ID."
+  "Return the state plist of INSTANCE-ID."
   (plist-get (twidget-get-instance instance-id) :state))
 
-;;; Rendering
+;;;; Virtual DOM Elements
 
 (defun twidget-h (&rest children)
-  "Create a virtual element with CHILDREN.
-Similar to Vue's h() function for creating vnodes.
-Each child can be a string, reactive text, or nested element."
-  (list :type 'fragment
-        :children children))
+  "Create a fragment element containing CHILDREN.
+Each child can be a string, reactive text, or another element."
+  (list :type 'fragment :children children))
 
 (defun twidget-span (props &rest children)
-  "Create a span element with PROPS and CHILDREN.
-PROPS is a plist of text properties to apply."
-  (list :type 'span
-        :props props
-        :children children))
+  "Create a span element with PROPS applied to CHILDREN.
+PROPS is a plist of text properties."
+  (list :type 'span :props props :children children))
 
-(defun twidget--render-element (element buffer)
-  "Render ELEMENT into BUFFER. Returns the rendered text length."
-  (cond
-   ;; Reactive text (propertized string with twidget-ref) - check this first
-   ;; The text properties (twidget-ref, twidget-format-fn, twidget-text-id)
-   ;; are already on the string, so just insert it - no registration needed
-   ((and (stringp element)
-         (> (length element) 0)
-         (tp-at 0 'twidget-ref element))
-    (insert element)
-    (length element))
-   
-   ;; Plain string - insert directly
-   ((stringp element)
-    (insert element)
-    (length element))
-   
-   ;; Fragment - render children
-   ((and (listp element) (eq (plist-get element :type) 'fragment))
-    (let ((total 0))
-      (dolist (child (plist-get element :children))
-        (cl-incf total (twidget--render-element child buffer)))
-      total))
-   
-   ;; Span - render with text properties using tp-set
-   ((and (listp element) (eq (plist-get element :type) 'span))
-    (let ((start (point))
-          (props (plist-get element :props))
-          (total 0))
-      (dolist (child (plist-get element :children))
-        (cl-incf total (twidget--render-element child buffer)))
-      ;; Apply text properties using tp-set
-      (when props
-        (tp-set start (point) props))
-      total))
-   
-   ;; List of elements
-   ((listp element)
-    (let ((total 0))
-      (dolist (child element)
-        (cl-incf total (twidget--render-element child buffer)))
-      total))
-   
-   ;; Other - convert to string
-   (t
-    (let ((text (format "%s" element)))
-      (insert text)
-      (length text)))))
+;;;; Rendering
 
 (defun twidget-render (component-name &optional props buffer point)
-  "Render component COMPONENT-NAME with PROPS at POINT in BUFFER.
+  "Render COMPONENT-NAME with PROPS at POINT in BUFFER.
+BUFFER defaults to current buffer; POINT defaults to current point.
 Returns the instance ID."
-  (let* ((buffer (or buffer (current-buffer)))
+  (let* ((buf (or buffer (current-buffer)))
          (instance-id (twidget-create-instance component-name props))
          (instance (twidget-get-instance instance-id))
          (component (twidget-get-component component-name))
          (render-fn (plist-get component :render))
-         (state (plist-get instance :state))
-         (vnode (funcall render-fn props state)))
-    (with-current-buffer buffer
-      (let ((inhibit-read-only t)
-            (start (or point (point))))
+         (vnode (funcall render-fn props (plist-get instance :state))))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
         (save-excursion
-          (goto-char start)
-          (let ((start-marker (point-marker))
-                (len (twidget--render-element vnode buffer)))
+          (goto-char (or point (point)))
+          (let ((start-marker (point-marker)))
+            (twidget--render-vnode vnode)
             (set-marker-insertion-type start-marker nil)
-            ;; Update instance data
-            (plist-put instance :mounted t)
-            (plist-put instance :buffer buffer)
+            (plist-put instance :buffer buf)
             (plist-put instance :start-marker start-marker)
             (plist-put instance :end-marker (point-marker))
-            ;; Track instance in buffer
-            (push instance-id twidget-buffer-instances)))))
+            (push instance-id twidget--buffer-instances)))))
     instance-id))
 
-(defun twidget-unmount (instance-id)
-  "Unmount component instance INSTANCE-ID."
-  (when-let ((instance (twidget-get-instance instance-id)))
-    (let ((buffer (plist-get instance :buffer))
-          (start-marker (plist-get instance :start-marker))
-          (end-marker (plist-get instance :end-marker)))
-      ;; Remove from buffer
-      (when (and buffer (buffer-live-p buffer)
-                 start-marker end-marker
-                 (marker-buffer start-marker)
-                 (marker-buffer end-marker))
-        (with-current-buffer buffer
-          (let ((inhibit-read-only t))
-            (delete-region (marker-position start-marker)
-                           (marker-position end-marker)))))
-      ;; Clean up markers
-      (when start-marker (set-marker start-marker nil))
-      (when end-marker (set-marker end-marker nil))
-      ;; Clean up state refs
-      (let ((state (plist-get instance :state)))
-        (when state
-          (cl-loop for (key val) on state by #'cddr
-                   when (gethash val twidget-reactive-refs)
-                   do (twidget-unref val))))
-      ;; Remove instance
-      (remhash instance-id twidget-instances)
-      ;; Remove from buffer tracking
-      (when (and buffer (buffer-live-p buffer))
-        (with-current-buffer buffer
-          (setq twidget-buffer-instances
-                (delete instance-id twidget-buffer-instances)))))))
+(defun twidget--render-vnode (vnode)
+  "Render VNODE into current buffer at point.  Returns text length."
+  (cond
+   ;; Reactive text string (has twidget-ref property)
+   ((and (stringp vnode) (> (length vnode) 0) (tp-at 0 'twidget-ref vnode))
+    (insert vnode)
+    (length vnode))
+   ;; Plain string
+   ((stringp vnode)
+    (insert vnode)
+    (length vnode))
+   ;; Fragment: render children sequentially
+   ((eq (plist-get vnode :type) 'fragment)
+    (cl-reduce #'+ (plist-get vnode :children)
+               :key #'twidget--render-vnode :initial-value 0))
+   ;; Span: render children with text properties
+   ((eq (plist-get vnode :type) 'span)
+    (let ((start (point))
+          (len (cl-reduce #'+ (plist-get vnode :children)
+                          :key #'twidget--render-vnode :initial-value 0)))
+      (when-let ((props (plist-get vnode :props)))
+        (tp-set start (point) props))
+      len))
+   ;; List of elements
+   ((listp vnode)
+    (cl-reduce #'+ vnode :key #'twidget--render-vnode :initial-value 0))
+   ;; Fallback: convert to string
+   (t
+    (let ((text (format "%s" vnode)))
+      (insert text)
+      (length text)))))
 
-;;; Utility Functions
+(defun twidget-unmount (instance-id)
+  "Remove INSTANCE-ID from its buffer and clean up resources."
+  (when-let ((instance (twidget-get-instance instance-id)))
+    (twidget--delete-instance-region instance)
+    (twidget--cleanup-instance-markers instance)
+    (twidget--cleanup-instance-refs instance)
+    (remhash instance-id twidget--instances)
+    (twidget--untrack-buffer-instance instance instance-id)))
+
+(defun twidget--delete-instance-region (instance)
+  "Delete the text region of INSTANCE from its buffer."
+  (let ((buffer (plist-get instance :buffer))
+        (start (plist-get instance :start-marker))
+        (end (plist-get instance :end-marker)))
+    (when (and buffer (buffer-live-p buffer) start end
+               (marker-buffer start) (marker-buffer end))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (delete-region (marker-position start) (marker-position end)))))))
+
+(defun twidget--cleanup-instance-markers (instance)
+  "Release markers held by INSTANCE."
+  (when-let ((start (plist-get instance :start-marker)))
+    (set-marker start nil))
+  (when-let ((end (plist-get instance :end-marker)))
+    (set-marker end nil)))
+
+(defun twidget--cleanup-instance-refs (instance)
+  "Destroy refs created in INSTANCE state."
+  (when-let ((state (plist-get instance :state)))
+    (cl-loop for (_key val) on state by #'cddr
+             when (twidget-ref-p val) do (twidget-unref val))))
+
+(defun twidget--untrack-buffer-instance (instance instance-id)
+  "Remove INSTANCE-ID from buffer-local tracking."
+  (when-let ((buffer (plist-get instance :buffer)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (setq twidget--buffer-instances
+              (delete instance-id twidget--buffer-instances))))))
+
+;;;; Convenience Functions
 
 (defun twidget-insert (text &optional props)
-  "Insert TEXT with optional PROPS at point.
-Uses tp-set to apply text properties.
-Returns markers for start and end of inserted text."
+  "Insert TEXT at point with optional text PROPS.
+Returns (start-marker . end-marker)."
   (let ((start (point-marker)))
     (insert text)
     (when props
@@ -410,64 +396,53 @@ Returns markers for start and end of inserted text."
       (cons start end))))
 
 (defun twidget-insert-reactive (ref &optional format-fn props)
-  "Insert reactive text for REF at point.
-FORMAT-FN formats the value, PROPS are additional text properties.
-The inserted text is marked with `twidget-ref`, `twidget-format-fn`,
-and `twidget-text-id` properties for reactive updates using tp-set.
-Returns the start and end positions as a cons cell."
+  "Insert reactive text bound to REF at point.
+FORMAT-FN formats the value; PROPS are additional text properties.
+Returns (start . end) positions."
   (let* ((value (twidget-ref-value ref))
-         (text (if format-fn
-                   (funcall format-fn value)
-                 (format "%s" value)))
-         (text-id (twidget--generate-text-id))
+         (text (if format-fn (funcall format-fn value) (format "%s" value)))
          (start (point)))
     (insert text)
-    ;; Apply reactive text properties using tp-set
     (tp-set start (point)
             (append (list 'twidget-ref ref
                           'twidget-format-fn format-fn
-                          'twidget-text-id text-id)
+                          'twidget-text-id (twidget--next-id "twidget-text"))
                     props))
     (cons start (point))))
 
-(defun twidget-clear-buffer-instances ()
-  "Clear all component instances in current buffer."
+;;;; Cleanup
+
+(defun twidget-clear-buffer ()
+  "Unmount all component instances in current buffer."
   (interactive)
-  (dolist (instance-id twidget-buffer-instances)
-    (twidget-unmount instance-id))
-  (setq twidget-buffer-instances nil))
+  (dolist (id twidget--buffer-instances)
+    (twidget-unmount id))
+  (setq twidget--buffer-instances nil))
 
 (defun twidget-reset ()
-  "Reset all twidget state."
+  "Reset all twidget state globally."
   (interactive)
-  ;; Clear all instances
-  (maphash (lambda (id _instance)
-             (twidget-unmount id))
-           twidget-instances)
-  (clrhash twidget-instances)
-  ;; Clear all refs
-  (maphash (lambda (ref _data)
-             (remove-variable-watcher ref #'twidget--ref-watcher)
-             (when (boundp ref)
-               (makunbound ref)))
-           twidget-reactive-refs)
-  (clrhash twidget-reactive-refs)
-  ;; Reset counters
-  (setq twidget--instance-counter 0)
-  (setq twidget-reactive-text-id-counter 0))
+  ;; Unmount all instances
+  (maphash (lambda (id _) (twidget-unmount id)) twidget--instances)
+  (clrhash twidget--instances)
+  ;; Destroy all refs
+  (maphash (lambda (ref _)
+             (remove-variable-watcher ref #'twidget--on-ref-change)
+             (when (boundp ref) (makunbound ref)))
+           twidget--refs)
+  (clrhash twidget--refs)
+  ;; Reset counter
+  (setq twidget--id-counter 0))
 
-;;; Built-in Components
+;;;; Built-in Components
 
 (define-twidget twidget-text-display
   :props (value format-fn)
   :setup (lambda (props)
-           (let* ((initial (plist-get props :value))
-                  (text-ref (twidget-ref initial)))
-             (list :text-ref text-ref)))
+           (list :text-ref (twidget-ref (plist-get props :value))))
   :render (lambda (props state)
-            (let ((text-ref (plist-get state :text-ref))
-                  (format-fn (plist-get props :format-fn)))
-              (twidget-text text-ref format-fn))))
+            (twidget-text (plist-get state :text-ref)
+                          (plist-get props :format-fn))))
 
 (define-twidget twidget-button
   :props (label on-click face)
@@ -489,29 +464,22 @@ Returns the start and end positions as a cons cell."
 (define-twidget twidget-progress
   :props (current total width)
   :setup (lambda (props)
-           (let* ((current (twidget-ref (or (plist-get props :current) 0)))
-                  (total (twidget-ref (or (plist-get props :total) 100)))
-                  (width (or (plist-get props :width) 20)))
-             (list :current current
-                   :total total
-                   :width width)))
-  :render (lambda (props state)
-            (let* ((current-ref (plist-get state :current))
-                   (total-ref (plist-get state :total))
+           (list :current (twidget-ref (or (plist-get props :current) 0))
+                 :total (twidget-ref (or (plist-get props :total) 100))
+                 :width (or (plist-get props :width) 20)))
+  :render (lambda (_props state)
+            (let* ((current (twidget-ref-value (plist-get state :current)))
+                   (total (twidget-ref-value (plist-get state :total)))
                    (width (plist-get state :width))
-                   (current (twidget-ref-value current-ref))
-                   (total (twidget-ref-value total-ref))
-                   (percentage (if (> total 0)
-                                   (/ (* current 100.0) total)
-                                 0))
-                   (filled (round (* width (/ percentage 100.0))))
+                   (pct (if (> total 0) (/ (* current 100.0) total) 0))
+                   (filled (round (* width (/ pct 100.0))))
                    (empty (- width filled)))
               (twidget-h
                "["
                (twidget-span '(face (:foreground "green"))
                              (make-string filled ?#))
                (make-string empty ?-)
-               (format "] %d%%" (round percentage))))))
+               (format "] %d%%" (round pct))))))
 
 (provide 'twidget)
 ;;; twidget.el ends here
