@@ -140,9 +140,9 @@ DEPS are the reactive refs this computed value depends on.
 Returns a new ref that auto-updates when dependencies change."
   (let* ((computed-ref (twidget-ref (funcall compute-fn)))
          (update-fn (lambda (new _old ref)
-                      ;; We need to temporarily bind the changed variable
-                      ;; to its new value before recomputing
-                      (cl-letf (((symbol-value ref) new))
+                      ;; Temporarily bind the changed variable to its new value
+                      ;; before recomputing, using cl-progv for dynamic binding
+                      (cl-progv (list ref) (list new)
                         (twidget-ref-set computed-ref (funcall compute-fn))))))
     ;; Watch all dependencies
     (dolist (dep deps)
@@ -536,7 +536,7 @@ Falls back to standard text properties if tp.el is not loaded."
                    (empty (- width filled)))
               (twidget-h
                "["
-               (twidget-span '(face success)
+               (twidget-span '(face (:foreground "green"))
                              (make-string filled ?#))
                (make-string empty ?-)
                (format "] %d%%" (round percentage))))))
