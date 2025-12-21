@@ -15,3 +15,7 @@
 # Package files
 *.tar
 *.zip
+
+# Downloaded dependencies (for local testing)
+dash.el
+tp.el

@@ -5,7 +5,7 @@
 ;; Version: 0.1.0
 ;; Keywords: convenience text-properties ui components
 ;; Author: Geekinney (kinneyzhang666@gmail.com)
-;; Package-Requires: ((emacs "28.1") (dash "2.19.1") (tp "0.1.0"))
+;; Package-Requires: ((emacs "28.1") (tp "0.1.0"))
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
@@ -31,13 +31,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
-
-;; Optional dependency on tp.el for reactive text properties
-(declare-function tp-set "tp" (start-or-string &optional end-or-prop props-or-val &rest rest))
-(declare-function tp-add "tp" (start-or-string &optional end-or-prop props-or-val &rest rest))
-(declare-function tp-at "tp" (pos &optional property-or-object object))
-(declare-function tp-clear "tp" (&optional start end object))
-(declare-function tp-define-layer "tp" (name &rest args))
+(require 'tp)
 
 ;;; Variables
 
@@ -160,7 +154,7 @@ Returns a new ref that auto-updates when dependencies change."
 ;; Uses text properties to identify reactive text regions instead of markers.
 ;; Each reactive text has a unique `twidget-text-id` property that links it
 ;; to its ref and format function. When a ref changes, we search for all text
-;; with the matching `twidget-ref` property and update it.
+;; with the matching `twidget-ref` property and update it using tp.el APIs.
 
 (defun twidget--generate-text-id ()
   "Generate a unique text ID for reactive text tracking."
@@ -170,23 +164,21 @@ Returns a new ref that auto-updates when dependencies change."
 (defun twidget--update-reactive-texts (ref newval)
   "Update all reactive text regions for REF with NEWVAL.
 Searches all buffers for text with `twidget-ref' property matching REF
-and updates them with the new value."
+and updates them with the new value using tp.el's search API."
   (dolist (buf (buffer-list))
     (when (buffer-live-p buf)
       (with-current-buffer buf
         (save-excursion
           (let ((inhibit-read-only t))
-            ;; Search for all text with this ref
+            ;; Use tp-search-forward to find all text with this ref
             (goto-char (point-min))
-            (while (let ((match (text-property-search-forward 'twidget-ref ref t)))
+            (while (let ((match (tp-search-forward 'twidget-ref ref t)))
                      (when match
                        (let* ((start (prop-match-beginning match))
                               (end (prop-match-end match))
-                              (format-fn (get-text-property start 'twidget-format-fn))
-                              ;; Capture all properties to restore them on the new text
-                              ;; This includes twidget-ref, twidget-format-fn, twidget-text-id
-                              ;; which is intentional to maintain reactivity
-                              (props (text-properties-at start))
+                              (format-fn (tp-at start 'twidget-format-fn))
+                              ;; Get all properties using tp-at
+                              (props (tp-at start))
                               (new-text (if format-fn
                                             (funcall format-fn newval)
                                           (format "%s" newval))))
@@ -194,8 +186,8 @@ and updates them with the new value."
                          (goto-char start)
                          (delete-region start end)
                          (insert new-text)
-                         ;; Restore all properties on the new text
-                         (add-text-properties start (+ start (length new-text)) props))
+                         ;; Use tp-set to restore all properties on the new text
+                         (tp-set start (+ start (length new-text)) props))
                        t)))))))))
 
 (defun twidget-text (ref &optional format-fn)
@@ -208,11 +200,11 @@ The text is identified by a unique `twidget-text-id` property."
                    (funcall format-fn value)
                  (format "%s" value)))
          (text-id (twidget--generate-text-id)))
-    ;; Store format-fn and unique ID for later use when updating
-    (propertize text
-                'twidget-ref ref
-                'twidget-format-fn format-fn
-                'twidget-text-id text-id)))
+    ;; Use tp-set to apply properties to the string
+    (tp-set text
+            'twidget-ref ref
+            'twidget-format-fn format-fn
+            'twidget-text-id text-id)))
 
 ;;; Component Definition
 
@@ -302,7 +294,7 @@ PROPS is a plist of text properties to apply."
    ;; are already on the string, so just insert it - no registration needed
    ((and (stringp element)
          (> (length element) 0)
-         (get-text-property 0 'twidget-ref element))
+         (tp-at 0 'twidget-ref element))
     (insert element)
     (length element))
    
@@ -318,16 +310,16 @@ PROPS is a plist of text properties to apply."
         (cl-incf total (twidget--render-element child buffer)))
       total))
    
-   ;; Span - render with text properties
+   ;; Span - render with text properties using tp-set
    ((and (listp element) (eq (plist-get element :type) 'span))
     (let ((start (point))
           (props (plist-get element :props))
           (total 0))
       (dolist (child (plist-get element :children))
         (cl-incf total (twidget--render-element child buffer)))
-      ;; Apply text properties
+      ;; Apply text properties using tp-set
       (when props
-        (add-text-properties start (point) props))
+        (tp-set start (point) props))
       total))
    
    ;; List of elements
@@ -406,11 +398,12 @@ Returns the instance ID."
 
 (defun twidget-insert (text &optional props)
   "Insert TEXT with optional PROPS at point.
+Uses tp-set to apply text properties.
 Returns markers for start and end of inserted text."
   (let ((start (point-marker)))
     (insert text)
     (when props
-      (add-text-properties (marker-position start) (point) props))
+      (tp-set (marker-position start) (point) props))
     (let ((end (point-marker)))
       (set-marker-insertion-type start nil)
       (set-marker-insertion-type end t)
@@ -420,7 +413,7 @@ Returns markers for start and end of inserted text."
   "Insert reactive text for REF at point.
 FORMAT-FN formats the value, PROPS are additional text properties.
 The inserted text is marked with `twidget-ref`, `twidget-format-fn`,
-and `twidget-text-id` properties for reactive updates.
+and `twidget-text-id` properties for reactive updates using tp-set.
 Returns the start and end positions as a cons cell."
   (let* ((value (twidget-ref-value ref))
          (text (if format-fn
@@ -429,12 +422,12 @@ Returns the start and end positions as a cons cell."
          (text-id (twidget--generate-text-id))
          (start (point)))
     (insert text)
-    ;; Apply reactive text properties
-    (add-text-properties start (point)
-                         (append (list 'twidget-ref ref
-                                       'twidget-format-fn format-fn
-                                       'twidget-text-id text-id)
-                                 props))
+    ;; Apply reactive text properties using tp-set
+    (tp-set start (point)
+            (append (list 'twidget-ref ref
+                          'twidget-format-fn format-fn
+                          'twidget-text-id text-id)
+                    props))
     (cons start (point))))
 
 (defun twidget-clear-buffer-instances ()
@@ -462,19 +455,6 @@ Returns the start and end positions as a cons cell."
   ;; Reset counters
   (setq twidget--instance-counter 0)
   (setq twidget-reactive-text-id-counter 0))
-
-;;; tp.el Integration
-
-(defun twidget-tp-available-p ()
-  "Check if tp.el is available."
-  (featurep 'tp))
-
-(defun twidget-with-tp-props (text props)
-  "Apply text properties PROPS to TEXT using tp.el if available.
-Falls back to standard text properties if tp.el is not loaded."
-  (if (twidget-tp-available-p)
-      (tp-set text props)
-    (apply #'propertize text props)))
 
 ;;; Built-in Components
 

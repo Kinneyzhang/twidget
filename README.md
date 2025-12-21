@@ -29,13 +29,13 @@
 ## Requirements
 
 - **Emacs 28.1+**
-- **dash.el** (list manipulation)
-- **tp.el** (optional, for reactive text properties)
+- **tp.el** (required, for text property manipulation and reactive updates)
 
 ## Installation
 
 ```elisp
 ;; Add to load-path
+(add-to-list 'load-path "/path/to/tp")
 (add-to-list 'load-path "/path/to/twidget")
 (require 'twidget)
 ```
@@ -44,7 +44,8 @@ Or with `use-package`:
 
 ```elisp
 (use-package twidget
-  :load-path "/path/to/twidget")
+  :load-path "/path/to/twidget"
+  :after tp)
 ```
 
 ## Quick Start
