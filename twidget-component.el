@@ -228,15 +228,13 @@ Props with $ prefix are resolved to their global variable values."
         (dolist (rsym reactive-syms)
           (let ((var-sym (twidget--reactive-var-symbol rsym)))
             (when (and var-sym (boundp var-sym))
-              ;; Create a ref wrapper for the global variable
-              (let ((ref (twidget-ref (symbol-value var-sym))))
-                ;; Watch for changes and re-render
-                (push (twidget-watch
-                       (lambda () (symbol-value var-sym))
-                       (lambda (new-val _old _cleanup)
-                         (twidget--update-instance instance))
-                       '(:immediate nil))
-                      watchers)))))))
+              ;; Watch for changes and re-render
+              (push (twidget-watch
+                     (lambda () (symbol-value var-sym))
+                     (lambda (_new-val _old _cleanup)
+                       (twidget--update-instance instance))
+                     '(:immediate nil))
+                    watchers))))))
     (setf (twidget-instance-watchers instance) watchers)))
 
 (defun twidget-create-instance (component-name &rest props)

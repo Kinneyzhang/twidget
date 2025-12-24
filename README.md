@@ -274,12 +274,15 @@ Must be called within a setup function.
 
 ### Reactivity System
 
-See `twidget-reactive.md` for detailed documentation on:
-- `twidget-ref` - Reactive reference
-- `twidget-reactive` - Reactive object
-- `twidget-computed` - Computed property
-- `twidget-watch` - Watcher
-- `twidget-effect` - Effect
+The reactivity system (`twidget-reactive.el`) provides Vue3-style reactive primitives:
+
+- `twidget-ref` - Reactive reference for single values
+- `twidget-reactive` - Reactive object for structured data
+- `twidget-computed` - Computed property with caching
+- `twidget-watch` - Watcher for reacting to changes
+- `twidget-effect` - Side effect that auto-tracks dependencies
+
+For detailed documentation, see `twidget-reactive.md`.
 
 ## Built-in Components
 
