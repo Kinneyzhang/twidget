@@ -1,4 +1,4 @@
-;;; twidget-reactive. el --- Vue3-style Reactivity System for Emacs -*- lexical-binding: t; -*-
+;;; twidget-reactive.el --- Vue3-style Reactivity System for Emacs -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2025
 ;; Author:  Twidget Team
@@ -14,90 +14,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 
-;;; ============================================================================
-;;; 基础数据结构：Set 和 Map
-;;; ============================================================================
-
-(defun twidget-set-make ()
-  "Create a new set."
-  (make-hash-table :test 'equal))
-
-(defun twidget-set-empty-p (set)
-  "Return t if SET is empty."
-  (hash-table-empty-p set))
-
-(defun twidget-set-count (set)
-  "Return the number of elements in SET."
-  (hash-table-count set))
-
-(defun twidget-set-add (set el)
-  "Add element EL to SET."
-  (puthash el t set))
-
-(defun twidget-set-has (set el)
-  "Return t if EL is a member of SET."
-  (gethash el set nil))
-
-(defun twidget-set-delete (set el)
-  "Remove element EL from SET."
-  (remhash el set))
-
-(defun twidget-set-foreach (set fn)
-  "Call FN for each element in SET."
-  (maphash (lambda (key _) (funcall fn key)) set))
-
-(defun twidget-set-to-list (set)
-  "Convert SET to a list."
-  (hash-table-keys set))
-
-(defun twidget-set-clear (set)
-  "Remove all elements from SET."
-  (clrhash set))
-
-(defun twidget-map-make ()
-  "Create a new map."
-  (make-hash-table :test 'equal))
-
-(defun twidget-map-empty-p (map)
-  "Return t if MAP is empty."
-  (hash-table-empty-p map))
-
-(defun twidget-map-count (map)
-  "Return the number of key-value pairs in MAP."
-  (hash-table-count map))
-
-(defun twidget-map-set (map key value)
-  "Set KEY to VALUE in MAP."
-  (puthash key value map))
-
-(defun twidget-map-get (map key &optional default)
-  "Get value for KEY from MAP, return DEFAULT if not found."
-  (gethash key map default))
-
-(defun twidget-map-has (map key)
-  "Return t if MAP contains KEY."
-  (not (eq (gethash key map 'twidget--not-found) 'twidget--not-found)))
-
-(defun twidget-map-delete (map key)
-  "Remove KEY from MAP."
-  (remhash key map))
-
-(defun twidget-map-foreach (map fn)
-  "Call FN with key and value for each entry in MAP."
-  (maphash fn map))
-
-(defun twidget-map-keys (map)
-  "Return all keys in MAP as a list."
-  (hash-table-keys map))
-
-(defun twidget-map-values (map)
-  "Return all values in MAP as a list."
-  (hash-table-values map))
-
-(defun twidget-map-clear (map)
-  "Remove all entries from MAP."
-  (clrhash map))
 
 ;;; ============================================================================
 ;;; 核心响应式系统
@@ -143,15 +61,23 @@
   (scheduler nil :documentation "Custom scheduler function.")
   (on-stop nil :documentation "Callback when effect is stopped.")
   (active t :documentation "Whether this effect is active.")
-  (lazy nil :documentation "Whether to skip initial execution. "))
+  (lazy nil :documentation "Whether to skip initial execution."))
+
+(cl-defstruct (twidget-runner (:constructor twidget-runner--create))
+  "Structure representing a runner function for reactive effects."
+  (effect nil :documentation "The associated effect.")
+  (run nil :documentation "The function to run the effect."))
 
 (defun twidget--cleanup-effect (effect)
-  "Clean up EFFECT by removing it from all its dependency sets."
+  "Clean up EFFECT by removing it from all its dependency sets.
+DEPS is a hash table used as a set (keys are the dep-sets this effect belongs to)."
   (let ((deps (twidget-effect-deps effect)))
     (when deps
-      (dolist (dep (twidget-set-to-list deps))
-        (twidget-set-delete dep effect))
-      (twidget-set-clear deps))))
+      ;; For each dep-set that this effect belongs to, remove this effect
+      (maphash (lambda (dep-set _)
+                 (remhash effect dep-set))
+               deps)
+      (clrhash deps))))
 
 (defun twidget--run-effect (effect)
   "Run EFFECT and track its dependencies."
@@ -174,29 +100,31 @@ OPTIONS is a plist with the following keys:
   :lazy - if t, don't run immediately
   :on-stop - callback when effect is stopped
 
-Return the effect runner function."
+Return the effect runner (a twidget-runner struct)."
   (let* ((scheduler (plist-get options :scheduler))
          (lazy (plist-get options :lazy))
          (on-stop (plist-get options :on-stop))
          (effect (twidget-effect--create
                   :fn fn
-                  :deps (twidget-set-make)
+                  :deps (make-hash-table :test 'eq)
                   :scheduler scheduler
                   :on-stop on-stop
                   :active t
                   :lazy lazy))
-         (runner (lambda ()
-                   (twidget--run-effect effect))))
-    ;; 存储 runner 到 effect 以便后续调用
-    (put runner 'twidget-effect effect)
+         (runner (twidget-runner--create
+                  :effect effect
+                  :run (lambda () (twidget--run-effect effect)))))
     ;; 非 lazy 模式立即执行
     (unless lazy
-      (funcall runner))
+      (funcall (twidget-runner-run runner)))
     runner))
 
 (defun twidget-stop (runner)
-  "Stop a reactive effect by its RUNNER function."
-  (let ((effect (get runner 'twidget-effect)))
+  "Stop a reactive effect by its RUNNER."
+  (let ((effect (if (twidget-runner-p runner)
+                    (twidget-runner-effect runner)
+                  ;; Fallback for legacy usage
+                  (get runner 'twidget-effect))))
     (when (and effect (twidget-effect-active effect))
       (twidget--cleanup-effect effect)
       (when (twidget-effect-on-stop effect)
@@ -208,36 +136,39 @@ Return the effect runner function."
 ;;; ============================================================================
 
 (defun twidget-track (target key)
-  "Track dependency for TARGET's KEY."
+  "Track dependency for TARGET's KEY.
+Uses hash tables internally:
+- deps-map: hash table mapping keys to dep-sets
+- dep-set: hash table used as a set of effects (effect -> t)"
   (when (and twidget--should-track twidget--active-effect)
     (let ((deps-map (gethash target twidget--target-map)))
       ;; 如果 target 没有 deps-map，创建一个
       (unless deps-map
-        (setq deps-map (twidget-map-make))
+        (setq deps-map (make-hash-table :test 'equal))
         (puthash target deps-map twidget--target-map))
       ;; 获取或创建 key 对应的 dep-set
-      (let ((dep-set (twidget-map-get deps-map key)))
+      (let ((dep-set (gethash key deps-map)))
         (unless dep-set
-          (setq dep-set (twidget-set-make))
-          (twidget-map-set deps-map key dep-set))
+          (setq dep-set (make-hash-table :test 'eq))
+          (puthash key dep-set deps-map))
         ;; 双向关联：effect 记录自己的 deps，dep-set 记录 effect
-        (twidget-set-add dep-set twidget--active-effect)
-        (twidget-set-add (twidget-effect-deps twidget--active-effect) dep-set)))))
+        (puthash twidget--active-effect t dep-set)
+        (puthash dep-set t (twidget-effect-deps twidget--active-effect))))))
 
 (defun twidget-trigger (target key)
   "Trigger effects for TARGET's KEY."
   (let ((deps-map (gethash target twidget--target-map)))
     (when deps-map
-      (let ((dep-set (twidget-map-get deps-map key))
+      (let ((dep-set (gethash key deps-map))
             (effects-to-run '()))
         (when dep-set
           ;; 收集需要执行的 effects
-          (twidget-set-foreach
-           dep-set
-           (lambda (effect)
+          (maphash
+           (lambda (effect _)
              ;; 避免在 effect 执行过程中触发自身
              (unless (eq effect twidget--active-effect)
-               (push effect effects-to-run))))
+               (push effect effects-to-run)))
+           dep-set)
           ;; 执行 effects
           (dolist (effect effects-to-run)
             (if (twidget-effect-scheduler effect)
@@ -276,7 +207,7 @@ The value can be accessed and modified via `twidget-ref-value'."
 
 (defun twidget-ref-p (obj)
   "Return t if OBJ is a ref."
-  (twidget-ref-p obj))
+  (cl-typep obj 'twidget-ref))
 
 (defun twidget-ref-get (ref)
   "Get the value of REF with dependency tracking."
@@ -333,11 +264,12 @@ DATA can be a plist, alist, or hash-table."
   "Convert ALIST to plist."
   (let (result)
     (dolist (pair alist)
-      (push (cdr pair) result)
-      (push (if (keywordp (car pair))
-                (car pair)
-              (intern (format ":%s" (car pair))))
-            result))
+      (let ((key (if (keywordp (car pair))
+                     (car pair)
+                   (intern (format ":%s" (car pair)))))
+            (value (cdr pair)))
+        (push key result)
+        (push value result)))
     (nreverse result)))
 
 (defun twidget--hash-to-plist (hash)
@@ -362,15 +294,16 @@ DATA can be a plist, alist, or hash-table."
   "Set KEY to VALUE in reactive OBJ and trigger updates."
   (unless (twidget-reactive-p obj)
     (error "Object is not reactive"))
-  (when (twidget-reactive-__v_isReadonly obj)
-    (warn "Cannot modify readonly reactive object")
-    (cl-return-from twidget-reactive-set nil))
-  (let* ((data (twidget-reactive-data obj))
-         (old-value (plist-get data key)))
-    (unless (equal old-value value)
-      (setf (twidget-reactive-data obj)
-            (plist-put data key value))
-      (twidget-trigger obj key))))
+  (if (twidget-reactive-__v_isReadonly obj)
+      (progn
+        (warn "Cannot modify readonly reactive object")
+        nil)
+    (let* ((data (twidget-reactive-data obj))
+           (old-value (plist-get data key)))
+      (unless (equal old-value value)
+        (setf (twidget-reactive-data obj)
+              (plist-put data key value))
+        (twidget-trigger obj key)))))
 
 (defun twidget-reactive-has (obj key)
   "Return t if reactive OBJ has KEY."
@@ -382,14 +315,15 @@ DATA can be a plist, alist, or hash-table."
   "Delete KEY from reactive OBJ."
   (unless (twidget-reactive-p obj)
     (error "Object is not reactive"))
-  (when (twidget-reactive-__v_isReadonly obj)
-    (warn "Cannot modify readonly reactive object")
-    (cl-return-from twidget-reactive-delete nil))
-  (let ((data (twidget-reactive-data obj)))
-    (when (plist-member data key)
-      (setf (twidget-reactive-data obj)
-            (twidget--plist-delete data key))
-      (twidget-trigger obj key))))
+  (if (twidget-reactive-__v_isReadonly obj)
+      (progn
+        (warn "Cannot modify readonly reactive object")
+        nil)
+    (let ((data (twidget-reactive-data obj)))
+      (when (plist-member data key)
+        (setf (twidget-reactive-data obj)
+              (twidget--plist-delete data key))
+        (twidget-trigger obj key)))))
 
 (defun twidget--plist-delete (plist key)
   "Delete KEY from PLIST."
@@ -482,7 +416,8 @@ SETTER is an optional setter function."
     (error "Object is not a computed property"))
   ;; 如果是脏的，重新计算
   (when (twidget-computed-dirty computed)
-    (funcall (twidget-computed-effect computed))
+    (let ((runner (twidget-computed-effect computed)))
+      (funcall (twidget-runner-run runner)))
     (setf (twidget-computed-dirty computed) nil))
   ;; 追踪依赖
   (twidget-track computed 'value)
@@ -521,6 +456,7 @@ Return a stop function."
          (once (plist-get options :once))
          (getter (twidget--create-getter source deep))
          (old-value 'twidget--initial)
+         (first-run t)
          (job nil)
          (cleanup nil)
          (on-cleanup (lambda (fn) (setq cleanup fn)))
@@ -530,27 +466,34 @@ Return a stop function."
             (let ((new-value (funcall getter)))
               (when (or (not (equal new-value old-value))
                         deep
-                        (eq old-value 'twidget--initial))
+                        first-run)
                 ;; 执行清理函数
                 (when cleanup
                   (funcall cleanup)
                   (setq cleanup nil))
                 ;; 调用回调
                 (funcall callback new-value
-                         (if (eq old-value 'twidget--initial)
-                             nil old-value)
+                         (if first-run nil old-value)
                          on-cleanup)
                 (setq old-value new-value)
+                (setq first-run nil)
                 ;; 如果是 once，停止 watch
                 (when (and once runner)
                   (twidget-stop runner))))))
+    ;; Create effect that always runs once to establish dependencies
+    ;; The scheduler handles subsequent triggers
     (setq runner
           (twidget-effect
            (lambda ()
-             (funcall getter))
-           (list :lazy (not immediate)
+             ;; Track dependencies by calling getter
+             (let ((current-value (funcall getter)))
+               ;; Store initial value for comparison (only for non-immediate)
+               (when (and (not immediate) first-run)
+                 (setq old-value current-value)
+                 (setq first-run nil))))
+           (list :lazy nil  ; Always run initially to track deps
                  :scheduler (lambda (_) (funcall job)))))
-    ;; 如果 immediate，立即执行一次
+    ;; 如果 immediate，立即执行回调
     (when immediate
       (funcall job))
     ;; 返回停止函数
@@ -588,13 +531,14 @@ Return a stop function."
     (error "Invalid watch source"))))
 
 (defun twidget--traverse (obj &optional seen)
-  "Traverse OBJ to track all properties (for deep watching)."
+  "Traverse OBJ to track all properties (for deep watching).
+SEEN is a hash table used as a set to track already visited objects."
   (unless seen
-    (setq seen (twidget-set-make)))
+    (setq seen (make-hash-table :test 'eq)))
   (cond
    ((twidget-reactive-p obj)
-    (unless (twidget-set-has seen obj)
-      (twidget-set-add seen obj)
+    (unless (gethash obj seen)
+      (puthash obj t seen)
       (dolist (key (twidget-reactive-keys obj))
         (twidget--traverse (twidget-reactive-get obj key) seen))))
    ((twidget-ref-p obj)
@@ -755,7 +699,7 @@ If OBJ-OR-KEY is reactive and KEY is provided, return a ref to that property."
    ((and (twidget-reactive-p obj-or-key) key)
     (let ((obj obj-or-key))
       (twidget-computed
-       (list : get (lambda () (twidget-reactive-get obj key))
+       (list :get (lambda () (twidget-reactive-get obj key))
              :set (lambda (v) (twidget-reactive-set obj key v))))))
    (t
     (twidget-ref obj-or-key))))
@@ -776,11 +720,11 @@ If OBJ-OR-KEY is reactive and KEY is provided, return a ref to that property."
     (if deps-map
         (progn
           (message "Dependencies for target:")
-          (twidget-map-foreach
-           deps-map
+          (maphash
            (lambda (key dep-set)
              (message "  Key: %s -> %d effects"
-                      key (twidget-set-count dep-set)))))
+                      key (hash-table-count dep-set)))
+           deps-map))
       (message "No dependencies tracked for this target."))))
 
 (defun twidget-debug-effect-count ()
@@ -788,10 +732,10 @@ If OBJ-OR-KEY is reactive and KEY is provided, return a ref to that property."
   (let ((count 0))
     (maphash
      (lambda (_target deps-map)
-       (twidget-map-foreach
-        deps-map
+       (maphash
         (lambda (_key dep-set)
-          (setq count (+ count (twidget-set-count dep-set))))))
+          (setq count (+ count (hash-table-count dep-set))))
+        deps-map))
      twidget--target-map)
     count))
 
@@ -801,4 +745,4 @@ If OBJ-OR-KEY is reactive and KEY is provided, return a ref to that property."
 
 (provide 'twidget-reactive)
 
-;;; twidget-reactive. el ends here
+;;; twidget-reactive.el ends here
