@@ -197,8 +197,7 @@ Uses hash tables internally:
 
 (cl-defstruct (twidget-ref (:constructor twidget-ref--create))
   "A reactive reference that holds a single value."
-  (value nil :documentation "The current value.")
-  (__v_isRef t :documentation "Flag to identify ref objects."))
+  (value nil :documentation "The current value."))
 
 (defun twidget-ref (value)
   "Create a reactive reference with initial VALUE. 
@@ -236,8 +235,7 @@ The value can be accessed and modified via `twidget-ref-value'."
 (cl-defstruct (twidget-reactive (:constructor twidget-reactive--create))
   "A reactive object that tracks property access and modification."
   (data nil :documentation "The underlying plist/alist data.")
-  (__v_isReactive t :documentation "Flag to identify reactive objects.")
-  (__v_isReadonly nil :documentation "Flag for readonly status."))
+  (readonly nil :documentation "Flag for readonly status."))
 
 (defun twidget-reactive (data)
   "Create a reactive object from DATA.
@@ -294,7 +292,7 @@ DATA can be a plist, alist, or hash-table."
   "Set KEY to VALUE in reactive OBJ and trigger updates."
   (unless (twidget-reactive-p obj)
     (error "Object is not reactive"))
-  (if (twidget-reactive-__v_isReadonly obj)
+  (if (twidget-reactive-readonly obj)
       (progn
         (warn "Cannot modify readonly reactive object")
         nil)
@@ -315,7 +313,7 @@ DATA can be a plist, alist, or hash-table."
   "Delete KEY from reactive OBJ."
   (unless (twidget-reactive-p obj)
     (error "Object is not reactive"))
-  (if (twidget-reactive-__v_isReadonly obj)
+  (if (twidget-reactive-readonly obj)
       (progn
         (warn "Cannot modify readonly reactive object")
         nil)
@@ -361,13 +359,13 @@ DATA can be a plist, alist, or hash-table."
   (let ((reactive (if (twidget-reactive-p obj)
                       (copy-twidget-reactive obj)
                     (twidget-reactive obj))))
-    (setf (twidget-reactive-__v_isReadonly reactive) t)
+    (setf (twidget-reactive-readonly reactive) t)
     reactive))
 
 (defun twidget-readonly-p (obj)
   "Return t if OBJ is a readonly reactive object."
   (and (twidget-reactive-p obj)
-       (twidget-reactive-__v_isReadonly obj)))
+       (twidget-reactive-readonly obj)))
 
 ;;; ============================================================================
 ;;; Computed：计算属性
@@ -598,31 +596,6 @@ Example:
   `(defvar ,name (twidget-ref ,value)))
 
 ;;; ============================================================================
-;;; 便捷的访问器别名
-;;; ============================================================================
-
-;; Ref shortcuts
-(defalias 'twidget-$ 'twidget-ref-get
-  "Shorthand for `twidget-ref-get'.")
-
-(defmacro twidget-$!  (ref value)
-  "Shorthand for `twidget-ref-set'."
-  `(twidget-ref-set ,ref ,value))
-
-;; Reactive shortcuts
-(defmacro twidget-.  (obj key)
-  "Shorthand for `twidget-reactive-get'."
-  `(twidget-reactive-get ,obj ,key))
-
-(defmacro twidget-.!  (obj key value)
-  "Shorthand for `twidget-reactive-set'."
-  `(twidget-reactive-set ,obj ,key ,value))
-
-;; Computed shortcuts
-(defalias 'twidget-c$ 'twidget-computed-get
-  "Shorthand for `twidget-computed-get'.")
-
-;;; ============================================================================
 ;;; 批量更新
 ;;; ============================================================================
 
@@ -679,7 +652,7 @@ Effects are only run once at the end, even if triggered multiple times."
 (defun twidget-is-readonly (obj)
   "Return t if OBJ is readonly."
   (and (twidget-reactive-p obj)
-       (twidget-reactive-__v_isReadonly obj)))
+       (twidget-reactive-readonly obj)))
 
 (defun twidget-to-raw (obj)
   "Get the raw underlying data from OBJ."
@@ -709,6 +682,26 @@ If OBJ-OR-KEY is reactive and KEY is provided, return a ref to that property."
   (if (twidget-ref-p ref)
       (twidget-ref-get ref)
     ref))
+
+;;; ============================================================================
+;;; 便捷的访问器别名
+;;; ============================================================================
+
+;; Ref shortcuts
+
+(defun twidget-get (object)
+  (cond
+   ((twidget-ref-p object) (twidget-ref-get object))
+   ((twidget-reactive-p object) (twidget-reactive-get object))
+   (t (error "Invalid format of reactive object: %S" object))))
+
+(defun twidget-set (object key-or-new-value &optional value)
+  (cond
+   ((twidget-ref-p object)
+    (twidget-ref-set object key-or-new-value))
+   ((twidget-reactive-p object)
+    (twidget-reactive-set object key-or-new-value value))
+   (t (error "Invalid format of reactive object: %S" object))))
 
 ;;; ============================================================================
 ;;; 调试工具
