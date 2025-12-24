@@ -56,14 +56,23 @@
       (twidget-assert (twidget-ref-p r) "Should be a ref")
       (twidget-assert (twidget-is-ref r) "twidget-is-ref should work")
       (twidget-assert-equal 42 (twidget-ref-get r))
-      (twidget-assert-equal 42 (twidget-$ r))))
+      (twidget-assert-equal 42 (twidget-get r))))
 
   (twidget-test "Ref: set value"
     (let ((r (twidget-ref 0)))
       (twidget-ref-set r 100)
       (twidget-assert-equal 100 (twidget-ref-get r))
-      (twidget-$! r 200)
+      (twidget-set r 200)
       (twidget-assert-equal 200 (twidget-ref-get r))))
+
+  (twidget-test "Ref: readonly"
+    (let ((r (twidget-ref 42 t)))
+      (twidget-assert (twidget-is-readonly r) "Should be readonly")
+      (twidget-assert-equal 42 (twidget-ref-get r))
+      ;; Setting readonly should emit warning and return nil
+      (twidget-assert-equal nil (twidget-ref-set r 100))
+      ;; Value should remain unchanged
+      (twidget-assert-equal 42 (twidget-ref-get r))))
 
   (twidget-test "Ref: increment and decrement"
     (let ((r (twidget-ref 10)))
@@ -103,8 +112,8 @@
     (let ((obj (twidget-reactive '(:count 0))))
       (twidget-reactive-set obj :count 10)
       (twidget-assert-equal 10 (twidget-reactive-get obj :count))
-      (twidget-.! obj :count 20)
-      (twidget-assert-equal 20 (twidget-. obj :count))))
+      (twidget-set obj :count 20)
+      (twidget-assert-equal 20 (twidget-reactive-get obj :count))))
 
   (twidget-test "Reactive: has and delete"
     (let ((obj (twidget-reactive '(:a 1 :b 2))))
@@ -202,8 +211,7 @@
                    (+ (twidget-ref-get a) (twidget-ref-get b))))))
       (twidget-assert (twidget-computed-p sum))
       (twidget-assert (twidget-is-computed sum))
-      (twidget-assert-equal 5 (twidget-computed-get sum))
-      (twidget-assert-equal 5 (twidget-c$ sum))))
+      (twidget-assert-equal 5 (twidget-computed-get sum))))
 
   (twidget-test "Computed: reactivity"
     (let* ((price (twidget-ref 100))

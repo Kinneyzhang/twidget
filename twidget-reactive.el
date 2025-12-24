@@ -197,12 +197,14 @@ Uses hash tables internally:
 
 (cl-defstruct (twidget-ref (:constructor twidget-ref--create))
   "A reactive reference that holds a single value."
-  (value nil :documentation "The current value."))
+  (value nil :documentation "The current value.")
+  (readonly nil :documentation "Flag for readonly status."))
 
-(defun twidget-ref (value)
+(defun twidget-ref (value &optional readonly)
   "Create a reactive reference with initial VALUE. 
+If READONLY is non-nil, the ref cannot be modified.
 The value can be accessed and modified via `twidget-ref-value'."
-  (twidget-ref--create :value value))
+  (twidget-ref--create :value value :readonly readonly))
 
 (defun twidget-ref-p (obj)
   "Return t if OBJ is a ref."
@@ -215,10 +217,14 @@ The value can be accessed and modified via `twidget-ref-value'."
 
 (defun twidget-ref-set (ref new-value)
   "Set REF to NEW-VALUE and trigger updates."
-  (let ((old-value (twidget-ref-value ref)))
-    (unless (equal old-value new-value)
-      (setf (twidget-ref-value ref) new-value)
-      (twidget-trigger ref 'value))))
+  (if (twidget-ref-readonly ref)
+      (progn
+        (warn "Cannot modify readonly ref")
+        nil)
+    (let ((old-value (twidget-ref-value ref)))
+      (unless (equal old-value new-value)
+        (setf (twidget-ref-value ref) new-value)
+        (twidget-trigger ref 'value)))))
 
 (defmacro twidget-ref-inc (ref &optional delta)
   "Increment REF by DELTA (default 1)."
@@ -651,8 +657,10 @@ Effects are only run once at the end, even if triggered multiple times."
 
 (defun twidget-is-readonly (obj)
   "Return t if OBJ is readonly."
-  (and (twidget-reactive-p obj)
-       (twidget-reactive-readonly obj)))
+  (or (and (twidget-reactive-p obj)
+           (twidget-reactive-readonly obj))
+      (and (twidget-ref-p obj)
+           (twidget-ref-readonly obj))))
 
 (defun twidget-to-raw (obj)
   "Get the raw underlying data from OBJ."

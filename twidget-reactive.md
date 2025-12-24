@@ -33,13 +33,16 @@
 ;; 创建 ref
 (setq count (twidget-ref 0))
 
+;; 创建只读 ref
+(setq readonly-count (twidget-ref 0 t))
+
 ;; 读取值（自动追踪依赖）
 (twidget-ref-get count)  ; => 0
-(twidget-$ count)        ; => 0 (简写)
+(twidget-get count)      ; => 0 (通用方法)
 
 ;; 设置值（自动触发更新）
 (twidget-ref-set count 10)
-(twidget-$! count 10)    ; (简写)
+(twidget-set count 10)   ; (通用方法)
 ```
 
 ### 2. Reactive（响应式对象）
@@ -52,11 +55,10 @@
 
 ;; 读取属性
 (twidget-reactive-get state :name)  ; => "Alice"
-(twidget-. state :name)             ; (简写)
 
 ;; 设置属性
 (twidget-reactive-set state :age 26)
-(twidget-.! state :age 26)          ; (简写)
+(twidget-set state :age 26)         ; (通用方法)
 ```
 
 ### 3. Effect（副作用）
@@ -90,7 +92,6 @@
             (twidget-ref-get quantity)))))
 
 (twidget-computed-get total)  ; => 200
-(twidget-c$ total)            ; => 200 (简写)
 
 (twidget-ref-set quantity 3)
 (twidget-computed-get total)  ; => 300 (自动更新)
@@ -124,13 +125,13 @@
 
 | 函数/宏 | 描述 |
 |---------|------|
-| `(twidget-ref value)` | 创建 ref |
+| `(twidget-ref value &optional readonly)` | 创建 ref，可选只读 |
 | `(twidget-ref-get ref)` | 获取值（追踪依赖） |
 | `(twidget-ref-set ref value)` | 设置值（触发更新） |
 | `(twidget-ref-inc ref &optional delta)` | 递增 |
 | `(twidget-ref-dec ref &optional delta)` | 递减 |
-| `(twidget-$ ref)` | 获取值（简写） |
-| `(twidget-$! ref value)` | 设置值（简写） |
+| `(twidget-get ref)` | 获取值（通用方法） |
+| `(twidget-set ref value)` | 设置值（通用方法） |
 | `(twidget-is-ref obj)` | 检查是否为 ref |
 | `(twidget-unref ref)` | 解包 ref，非 ref 返回原值 |
 
@@ -145,8 +146,7 @@
 | `(twidget-reactive-delete obj key)` | 删除属性 |
 | `(twidget-reactive-keys obj)` | 获取所有键 |
 | `(twidget-reactive-to-plist obj)` | 转换为普通 plist |
-| `(twidget-. obj key)` | 获取属性（简写） |
-| `(twidget-.! obj key value)` | 设置属性（简写） |
+| `(twidget-set obj key value)` | 设置属性（通用方法） |
 | `(twidget-is-reactive obj)` | 检查是否为响应式对象 |
 | `(twidget-readonly obj)` | 创建只读版本 |
 | `(twidget-is-readonly obj)` | 检查是否为只读 |
@@ -173,7 +173,6 @@
 | `(twidget-computed getter-or-options &optional setter)` | 创建计算属性 |
 | `(twidget-computed-get computed)` | 获取值 |
 | `(twidget-computed-set computed value)` | 设置值（需要 setter） |
-| `(twidget-c$ computed)` | 获取值（简写） |
 | `(twidget-is-computed obj)` | 检查是否为计算属性 |
 
 **Computed Options (使用 plist 形式):**
@@ -230,12 +229,12 @@
 ;; 创建副作用，自动在计数变化时更新显示
 (twidget-effect
  (lambda ()
-   (message "Counter: %d" (twidget-$ counter))))
+   (message "Counter: %d" (twidget-get counter))))
 
 ;; 更新计数器
 (twidget-ref-inc counter)  ; 输出: Counter: 1
 (twidget-ref-inc counter)  ; 输出: Counter: 2
-(twidget-$! counter 100)   ; 输出: Counter: 100
+(twidget-set counter 100)  ; 输出: Counter: 100
 ```
 
 ### 示例 2：购物车
@@ -251,8 +250,8 @@
 (setq total-price
       (twidget-computed
        (lambda ()
-         (let* ((items (twidget-. cart :items))
-                (discount (twidget-. cart :discount))
+         (let* ((items (twidget-reactive-get cart :items))
+                (discount (twidget-reactive-get cart :discount))
                 (subtotal (cl-reduce
                            (lambda (acc item)
                              (+ acc (* (plist-get item :price)
@@ -264,11 +263,11 @@
 ;; 显示总价
 (twidget-effect
  (lambda ()
-   (message "Total: $%.2f" (twidget-c$ total-price))))
+   (message "Total: $%.2f" (twidget-computed-get total-price))))
 ;; 输出: Total: $17.10
 
 ;; 更新折扣
-(twidget-.! cart :discount 0.2)
+(twidget-set cart :discount 0.2)
 ;; 自动输出: Total: $15.20
 ```
 
@@ -285,23 +284,23 @@
 (setq username-valid
       (twidget-computed
        (lambda ()
-         (let ((username (twidget-. form :username)))
+         (let ((username (twidget-reactive-get form :username)))
            (and (stringp username)
                 (>= (length username) 3))))))
 
 (setq email-valid
       (twidget-computed
        (lambda ()
-         (let ((email (twidget-. form :email)))
+         (let ((email (twidget-reactive-get form :email)))
            (and (stringp email)
                 (string-match-p "@" email))))))
 
 (setq form-valid
       (twidget-computed
        (lambda ()
-         (and (twidget-c$ username-valid)
-              (twidget-c$ email-valid)
-              (>= (length (twidget-. form :password)) 6)))))
+         (and (twidget-computed-get username-valid)
+              (twidget-computed-get email-valid)
+              (>= (length (twidget-reactive-get form :password)) 6)))))
 
 ;; 监听表单状态变化
 (twidget-watch
@@ -313,9 +312,9 @@
  '(:immediate t))
 
 ;; 更新表单
-(twidget-.! form :username "alice")
-(twidget-.! form :email "alice@example.com")
-(twidget-.! form :password "secret123")
+(twidget-set form :username "alice")
+(twidget-set form :email "alice@example.com")
+(twidget-set form :password "secret123")
 ;; 输出: Form is valid, submit button enabled
 ```
 
@@ -343,7 +342,7 @@
 (setq stop
       (twidget-watch-effect
        (lambda (on-cleanup)
-         (let ((ms (twidget-$ interval))
+         (let ((ms (twidget-get interval))
                timer)
            (setq timer (run-at-time nil (/ ms 1000.0)
                                     (lambda () (message "Tick!"))))
@@ -355,7 +354,7 @@
                         (message "Timer stopped"))))))))
 
 ;; 更改间隔会自动取消旧定时器并创建新的
-(twidget-$! interval 2000)
+(twidget-set interval 2000)
 
 ;; 停止监听
 (funcall stop)
@@ -367,26 +366,26 @@
 (setq state (twidget-reactive '(:a 1 :b 2 :c 3)))
 (setq sum (twidget-computed
            (lambda ()
-             (+ (twidget-. state :a)
-                (twidget-. state :b)
-                (twidget-. state :c)))))
+             (+ (twidget-reactive-get state :a)
+                (twidget-reactive-get state :b)
+                (twidget-reactive-get state :c)))))
 
 (setq update-count 0)
 (twidget-effect
  (lambda ()
    (setq update-count (1+ update-count))
-   (message "Sum: %d (update #%d)" (twidget-c$ sum) update-count)))
+   (message "Sum: %d (update #%d)" (twidget-computed-get sum) update-count)))
 
 ;; 不使用批量更新：会触发3次
-(twidget-.! state :a 10)
-(twidget-.! state :b 20)
-(twidget-.! state :c 30)
+(twidget-set state :a 10)
+(twidget-set state :b 20)
+(twidget-set state :c 30)
 
 ;; 使用批量更新：只触发1次
 (twidget-batch
- (twidget-.! state :a 100)
- (twidget-.! state :b 200)
- (twidget-.! state :c 300))
+ (twidget-set state :a 100)
+ (twidget-set state :b 200)
+ (twidget-set state :c 300))
 ```
 
 ### 示例 7：toRef 转换
@@ -399,11 +398,11 @@
 
 ;; 修改 ref 会同步到原对象
 (twidget-computed-set name-ref "Bob")
-(twidget-. user :name)  ; => "Bob"
+(twidget-reactive-get user :name)  ; => "Bob"
 
 ;; 修改原对象也会反映到 ref
-(twidget-.! user :name "Charlie")
-(twidget-c$ name-ref)  ; => "Charlie"
+(twidget-set user :name "Charlie")
+(twidget-computed-get name-ref)  ; => "Charlie"
 ```
 
 ---
@@ -429,14 +428,14 @@
 ;; ❌ 错误：可能导致无限循环
 (twidget-effect
  (lambda ()
-   (twidget-$! counter (1+ (twidget-$ counter)))))
+   (twidget-set counter (1+ (twidget-get counter)))))
 
 ;; ✅ 正确：使用 watch 或 without-tracking
 (twidget-watch
  counter
  (lambda (new-val _old &optional _on-cleanup)
    (when (< new-val 10)
-     (twidget-$! counter (1+ new-val)))))
+     (twidget-set counter (1+ new-val)))))
 ```
 
 ### 3. 使用 computed 缓存昂贵计算
@@ -447,14 +446,14 @@
       (twidget-computed
        (lambda ()
          (seq-filter #'expensive-predicate
-                     (twidget-. state :items)))))
+                     (twidget-reactive-get state :items)))))
 
 ;; ❌ 在 effect 中重复计算
 (twidget-effect
  (lambda ()
    ;; 每次依赖变化都重新计算
    (let ((result (seq-filter #'expensive-predicate
-                             (twidget-. state :items))))
+                             (twidget-reactive-get state :items))))
      (do-something result))))
 ```
 
@@ -476,9 +475,9 @@
 ```elisp
 ;; 当需要同时更新多个值时使用 batch
 (twidget-batch
- (twidget-.! state :loading t)
- (twidget-.! state :data nil)
- (twidget-.! state :error nil))
+ (twidget-set state :loading t)
+ (twidget-set state :data nil)
+ (twidget-set state :error nil))
 ```
 
 ---
