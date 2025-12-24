@@ -37,19 +37,6 @@
 (defvar twidget--should-track t
   "Flag indicating whether dependency tracking is enabled.")
 
-;; 用于标识响应式对象的符号
-(defconst twidget--reactive-flag '__twidget_reactive__
-  "Symbol used to mark reactive objects.")
-
-(defconst twidget--ref-flag '__twidget_ref__
-  "Symbol used to mark ref objects.")
-
-(defconst twidget--readonly-flag '__twidget_readonly__
-  "Symbol used to mark readonly objects.")
-
-(defconst twidget--raw-flag '__twidget_raw__
-  "Symbol used to store raw object reference.")
-
 ;;; ============================================================================
 ;;; Effect 副作用系统
 ;;; ============================================================================
