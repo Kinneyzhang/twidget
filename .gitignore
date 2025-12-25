@@ -16,6 +16,9 @@
 *.tar
 *.zip
 
-# Downloaded dependencies (for local testing)
-dash.el
-tp.el
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.flv
+*.gif
