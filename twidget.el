@@ -386,6 +386,9 @@ Ignoring arguments: %S" widget-name args)))
   (interactive)
   (setq twidget-alist nil))
 
+(defun twidget-insert (widget-form)
+  (insert (twidget-parse widget-form)))
+
 ;;; Utilities
 ;; ============================================================================
 
