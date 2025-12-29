@@ -58,9 +58,16 @@
 A plist is a list with an even number of elements where
 every other element (starting from the first) is a keyword."
     (and (listp object)
-         (cl-evenp (length object))
-         (cl-loop for (key _val) on object by #'cddr
-                  always (keywordp key)))))
+         (let ((len 0)
+               (valid t)
+               (lst object))
+           (while (and valid lst)
+             (if (keywordp (car lst))
+                 (progn
+                   (setq len (+ len 2))
+                   (setq lst (cddr lst)))
+               (setq valid nil)))
+           (and valid (null lst))))))
 
 ;;; Variables
 ;; ============================================================================
@@ -213,7 +220,8 @@ There are two ways to define a widget:
     ;; Validate: either :render or (:setup and :template) must be provided
     (when (and render (or setup template))
       (error "Cannot use both :render and :setup/:template in define-twidget"))
-    (when (cl-set-exclusive-or (list setup) (list template))
+    ;; XOR check: if one of setup/template is provided, both must be provided
+    (when (not (eq (null setup) (null template)))
       (error "Both :setup and :template must be provided together"))
     ;; Prepare slot value - the sentinel :twidget--unspecified needs to be passed as-is
     ;; Other values (t, nil, or list) should evaluate properly
@@ -796,13 +804,14 @@ Examples:
                                   (cond
                                    ((not (listp current))
                                     (error "Cannot use index access on non-list value"))
-                                   ((or (< key-or-index 0) (>= key-or-index (length current)))
-                                    (error "Index %d out of bounds for list of length %d"
-                                           key-or-index (length current)))
                                    (t
-                                    (let ((new-list (copy-sequence current)))
-                                      (setcar (nthcdr key-or-index new-list) value)
-                                      new-list)))))
+                                    (let ((len (length current)))
+                                      (if (or (< key-or-index 0) (>= key-or-index len))
+                                          (error "Index %d out of bounds for list of length %d"
+                                                 key-or-index len)
+                                        (let ((new-list (copy-sequence current)))
+                                          (setf (nth key-or-index new-list) value)
+                                          new-list)))))))
                                (t (error "KEY-OR-INDEX must be a keyword or integer")))))
                          ;; Update the ref value
                          (setf (twidget-ref-value ref) new-value)
