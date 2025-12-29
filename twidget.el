@@ -90,6 +90,10 @@ Keys are instance IDs (strings), values are plists with:
   "Buffer-local hash table for reactive ref tracking.
 Keys are (instance-id . var-name), values are the ref objects.")
 
+(defvar-local twidget-reactive-symbols (make-hash-table :test 'equal)
+  "Buffer-local hash table for reactive text symbol tracking.
+Keys are (instance-id . var-name), values are lists of symbols to update.")
+
 (defvar twidget--instance-counter 0
   "Counter for generating unique instance IDs.")
 
@@ -119,13 +123,22 @@ When the value changes, the UI will be updated automatically."
   "Register a reactive REF for INSTANCE-ID with VAR-NAME."
   (puthash (cons instance-id var-name) ref twidget-ref-registry))
 
-(defun twidget--apply-reactive-text (text instance-id reactive-vars)
-  "Apply reactive tracking to TEXT for INSTANCE-ID.
-REACTIVE-VARS is a list of variable names that are reactive in this text.
+(defvar-local twidget-reactive-text-counter 0
+  "Counter for generating unique reactive text IDs.")
+
+(defun twidget--apply-reactive-text (text instance-id var-name)
+  "Apply reactive tracking to TEXT for INSTANCE-ID with VAR-NAME.
 Returns text with tp.el properties for reactive updates."
-  ;; Create a reactive symbol and set its value
-  (let ((sym (intern (format "twidget--text-%s" instance-id))))
+  ;; Create a unique reactive symbol for this specific text occurrence
+  (let* ((text-id (cl-incf twidget-reactive-text-counter))
+         (sym (intern (format "twidget--rtext-%d" text-id))))
+    ;; Set the symbol value to just the reactive text (e.g., "0")
     (set sym text)
+    ;; Register this symbol for updates when the var changes
+    (let ((key (cons instance-id var-name)))
+      (puthash key
+               (cons sym (gethash key twidget-reactive-symbols))
+               twidget-reactive-symbols))
     ;; Use tp-set with the tp-text property type and the reactive symbol reference
     (tp-set text 'tp-text (intern (format "$%s" sym)))))
 
@@ -569,30 +582,33 @@ INSTANCE-ID is the widget instance identifier for reactivity."
 
 (defun twidget--expand-template-string (str bindings instance-id)
   "Expand STR template string with BINDINGS.
-INSTANCE-ID is used for reactive tracking."
-  (let ((reactive-refs nil))
-    ;; First pass: identify reactive refs
-    (let ((temp str))
-      (while (string-match "{\\([^}]+\\)}" temp)
-        (let* ((var-name (match-string 1 temp))
-               (ref-info (gethash (cons instance-id var-name) twidget-ref-registry)))
-          (when (and ref-info (assoc var-name bindings))
-            (push var-name reactive-refs)))
-        (setq temp (substring temp (match-end 0)))))
-    ;; Replace all placeholders using replace-regexp-in-string
-    (let ((result (replace-regexp-in-string
-                   "{\\([^}]+\\)}"
-                   (lambda (match)
-                     (let* ((var-name (match-string 1 match))
-                            (binding (assoc var-name bindings)))
-                       (if binding
-                           (format "%s" (cdr binding))
-                         match)))
-                   str t t)))
-      ;; If there are reactive refs, wrap with tracking overlay marker
-      (if reactive-refs
-          (twidget--apply-reactive-text result instance-id reactive-refs)
-        result))))
+INSTANCE-ID is used for reactive tracking.
+Only applies reactive tracking to individual placeholder values, not the entire string."
+  (let ((result "")
+        (start 0))
+    ;; Process string segment by segment
+    (while (string-match "{\\([^}]+\\)}" str start)
+      (let* ((match-start (match-beginning 0))
+             (match-end (match-end 0))
+             (var-name (match-string 1 str))
+             (binding (assoc var-name bindings))
+             (ref-info (gethash (cons instance-id var-name) twidget-ref-registry)))
+        ;; Add the non-placeholder part before this match
+        (setq result (concat result (substring str start match-start)))
+        ;; Add the placeholder value (with reactive tracking if it's a ref)
+        (if binding
+            (let ((value (format "%s" (cdr binding))))
+              (if ref-info
+                  ;; This is a reactive ref - apply reactive text tracking
+                  (setq result (concat result
+                                       (twidget--apply-reactive-text value instance-id var-name)))
+                ;; Not a reactive ref - just add the value
+                (setq result (concat result value))))
+          ;; No binding found - keep the placeholder as is
+          (setq result (concat result (substring str match-start match-end))))
+        (setq start match-end)))
+    ;; Add the remaining part after the last match
+    (concat result (substring str start))))
 
 (defun twidget--expand-template-widget (template bindings instance-id)
   "Expand widget TEMPLATE with BINDINGS.
@@ -825,30 +841,14 @@ Examples:
 
 (defun twidget--trigger-update (instance-id var-name value)
   "Trigger a reactive update for INSTANCE-ID when VAR-NAME changes to VALUE.
-This uses tp.el to update the text in the buffer."
-  (let* ((data (gethash instance-id twidget-instances))
-         (template (plist-get data :template))
-         (bindings (plist-get data :bindings))
-         (sym (intern (format "twidget--text-%s" instance-id))))
-    (when (and data template)
-      ;; Rebuild bindings alist with current values
-      (let ((new-bindings nil))
-        (let ((plist bindings))
-          (while plist
-            (let ((key (car plist))
-                  (val (cadr plist)))
-              (when (keywordp key)
-                (let* ((name (substring (symbol-name key) 1))
-                       (ref-value (if (twidget-ref-p val)
-                                      (twidget-ref-value val)
-                                    val)))
-                  (push (cons name ref-value) new-bindings))))
-            (setq plist (cddr plist))))
-        ;; Re-render the template with updated bindings
-        (let ((new-text (twidget--expand-template template new-bindings instance-id)))
-          ;; Update the reactive symbol - tp.el will handle buffer update
-          (when (boundp sym)
-            (set sym new-text)))))))
+This uses tp.el to update the text in the buffer by updating only the
+reactive symbols associated with the changed variable."
+  (let* ((key (cons instance-id var-name))
+         (symbols (gethash key twidget-reactive-symbols)))
+    ;; Update all reactive text symbols for this variable
+    (dolist (sym symbols)
+      (when (boundp sym)
+        (set sym (format "%s" value))))))
 
 (defun twidget-substitute-placeholders (str bindings)
   "Substitute {variable} placeholders in STR with values from BINDINGS.
