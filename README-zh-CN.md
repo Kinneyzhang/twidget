@@ -12,6 +12,8 @@
 - **插槽系统** - 支持单一插槽和命名插槽，实现灵活的内容组合
 - **组件继承** - 扩展父组件以创建特定变体
 - **文本属性** - 与 Emacs 文本属性无缝集成
+- **响应式数据** - 使用 `twidget-ref` 创建响应式 UI，自动更新
+- **复合组件** - 使用 `:setup` 和 `:template` 构建复杂组件
 
 ## 安装
 
@@ -98,7 +100,14 @@
 | `:slot` | 布尔值或列表。`nil`（无插槽）、`t`（单一插槽）或插槽名称列表 |
 | `:slots` | `:slot` 的别名，用于命名插槽 |
 | `:extends` | 要继承的父组件符号 |
-| `:render` | 返回渲染字符串的 lambda 函数 |
+| `:render` | 返回渲染字符串的 lambda 函数（用于简单组件） |
+| `:setup` | 返回响应式绑定 plist 的 lambda 函数（用于复合组件） |
+| `:template` | 组件结构的模板 sexp（用于复合组件） |
+
+**两种定义组件的方式：**
+
+1. **简单组件** - 使用 `:render` 直接渲染
+2. **复合组件** - 使用 `:setup` 和 `:template` 组合响应式数据
 
 **渲染函数签名：**
 
@@ -194,7 +203,110 @@
   :render ...)
 ```
 
+### 使用响应式数据的复合组件
+
+对于组合其他组件并具有响应式数据的复杂组件，使用 `:setup` 和 `:template`：
+
+```elisp
+;; 定义一个带响应式状态的计数器组件
+(define-twidget my-counter
+  :setup (lambda (_props)
+           ;; 返回包含响应式绑定的 plist
+           (list :count (twidget-ref "0")))
+  :template '(p (span "{count}")
+                " "
+                (button :action (lambda ()
+                                  (interactive)
+                                  (twidget-inc 'count 1))
+                        "+")
+                " "
+                (button :action (lambda ()
+                                  (interactive)
+                                  (twidget-dec 'count 1))
+                        "-")))
+
+;; 使用计数器
+(twidget-parse '(my-counter))
+```
+
+**关键概念：**
+
+- **`twidget-ref`** - 创建响应式引用。当值改变时，UI 自动更新。
+- **`:setup`** - 接收 props 并返回响应式绑定 plist 的函数。
+- **`:template`** - 定义组件结构的 quoted sexp。使用 `{varname}` 语法绑定响应式数据。
+
+### 响应式数据 API
+
+```elisp
+;; 创建响应式引用
+(twidget-ref "初始值")
+
+;; 获取响应式值
+(twidget-get 'varname)
+
+;; 设置响应式值（触发 UI 更新）
+(twidget-set 'varname "新值")
+
+;; 增加/减少数值
+(twidget-inc 'varname 1)
+(twidget-dec 'varname 1)
+```
+
 ## 实用函数
+
+### `twidget-ref`
+
+```elisp
+(twidget-ref INITIAL-VALUE)
+```
+
+创建带有初始值 INITIAL-VALUE 的响应式引用。返回可在 `:setup` 函数中使用的 twidget-ref 对象。
+
+### `twidget-get`
+
+```elisp
+(twidget-get SYM &optional KEY-OR-INDEX)
+```
+
+获取响应式变量 SYM 的当前值。
+
+对于 plist/list 类型的值，可以访问嵌套值：
+- 使用关键字（如 `:name`）访问 plist 属性
+- 使用整数索引（从 0 开始）访问列表元素
+
+```elisp
+;; 获取整个值
+(twidget-get 'user)
+
+;; 从 plist 值中获取 :name
+(twidget-get 'user :name)
+
+;; 从列表值中获取第一个元素
+(twidget-get 'items 0)
+```
+
+### `twidget-set`
+
+```elisp
+(twidget-set SYM VALUE &optional KEY-OR-INDEX)
+```
+
+将响应式变量 SYM 的值设置为 VALUE。这会触发缓冲区中的响应式更新。
+
+对于 plist/list 类型的值，可以设置嵌套值：
+- 使用关键字（如 `:name`）设置 plist 属性
+- 使用整数索引（从 0 开始）设置列表元素
+
+```elisp
+;; 设置整个值
+(twidget-set 'user new-user)
+
+;; 设置 plist 值中的 :name
+(twidget-set 'user "John" :name)
+
+;; 设置列表值中的第一个元素
+(twidget-set 'items "new-item" 0)
+```
 
 ### `twidget-inc`
 
@@ -202,7 +314,7 @@
 (twidget-inc SYM NUM)
 ```
 
-将符号 SYM 中存储的数字字符串增加 NUM。
+将响应式变量 SYM 中存储的数值增加 NUM。
 
 ### `twidget-dec`
 
@@ -210,7 +322,7 @@
 (twidget-dec SYM NUM)
 ```
 
-将符号 SYM 中存储的数字字符串减少 NUM。
+将响应式变量 SYM 中存储的数值减少 NUM。
 
 ## 示例
 

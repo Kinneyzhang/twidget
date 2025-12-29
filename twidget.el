@@ -51,6 +51,17 @@
 (require 'cl-lib)
 (require 'tp)
 
+;; Compatibility for Emacs < 29
+(unless (fboundp 'plistp)
+  (defun plistp (object)
+    "Return non-nil if OBJECT is a plist (property list).
+A plist is a list with an even number of elements where
+every other element (starting from the first) is a keyword."
+    (and (listp object)
+         (cl-evenp (length object))
+         (cl-loop for (key _val) on object by #'cddr
+                  always (keywordp key)))))
+
 ;;; Variables
 ;; ============================================================================
 
@@ -110,11 +121,11 @@ When the value changes, the UI will be updated automatically."
   "Apply reactive tracking to TEXT for INSTANCE-ID.
 REACTIVE-VARS is a list of variable names that are reactive in this text.
 Returns text with tp.el properties for reactive updates."
-  ;; For now, return text directly - reactive updates will be handled via overlays
-  ;; when we implement the buffer insertion with twidget-render
+  ;; Create a reactive symbol and set its value
   (let ((sym (intern (format "twidget--text-%s" instance-id))))
     (set sym text)
-    (tp-set text (list 'tp-text (intern (format "$%s" sym))))))
+    ;; Use tp-set with the tp-text property type and the reactive symbol reference
+    (tp-set text 'tp-text (intern (format "$%s" sym)))))
 
 ;;; Widget Definition
 ;; ============================================================================
@@ -204,9 +215,8 @@ There are two ways to define a widget:
     ;; Validate: either :render or (:setup and :template) must be provided
     (when (and render (or setup template))
       (error "Cannot use both :render and :setup/:template in define-twidget"))
-    (when (and (not render) (not (and setup template)))
-      (when (or setup template)
-        (error "Both :setup and :template must be provided together")))
+    (when (and (not render) (or setup template) (not (and setup template)))
+      (error "Both :setup and :template must be provided together"))
     ;; Prepare slot value - the sentinel :twidget--unspecified needs to be passed as-is
     ;; Other values (t, nil, or list) should evaluate properly
     (let ((slot-form (if (eq slot :twidget--unspecified)
@@ -553,25 +563,29 @@ INSTANCE-ID is the widget instance identifier for reactivity."
 (defun twidget--expand-template-string (str bindings instance-id)
   "Expand STR template string with BINDINGS.
 INSTANCE-ID is used for reactive tracking."
-  (let ((result str)
-        (reactive-refs nil))
-    ;; Find all {varname} placeholders
-    (while (string-match "{\\([^}]+\\)}" result)
-      (let* ((var-name (match-string 1 result))
-             (binding (assoc var-name bindings))
-             (ref-info (gethash (cons instance-id var-name) twidget-ref-registry)))
-        (if binding
-            (let ((value (cdr binding)))
-              ;; Track if this is a reactive ref
-              (when ref-info
-                (push var-name reactive-refs))
-              (setq result (replace-match (format "%s" value) t t result)))
-          ;; No binding found, leave placeholder as is
-          (setq result (replace-match (match-string 0 result) t t result)))))
-    ;; If there are reactive refs, wrap with tracking overlay marker
-    (if reactive-refs
-        (twidget--apply-reactive-text result instance-id reactive-refs)
-      result)))
+  (let ((reactive-refs nil))
+    ;; First pass: identify reactive refs
+    (let ((temp str))
+      (while (string-match "{\\([^}]+\\)}" temp)
+        (let* ((var-name (match-string 1 temp))
+               (ref-info (gethash (cons instance-id var-name) twidget-ref-registry)))
+          (when (and ref-info (assoc var-name bindings))
+            (push var-name reactive-refs)))
+        (setq temp (substring temp (match-end 0)))))
+    ;; Replace all placeholders using replace-regexp-in-string
+    (let ((result (replace-regexp-in-string
+                   "{\\([^}]+\\)}"
+                   (lambda (match)
+                     (let* ((var-name (match-string 1 match))
+                            (binding (assoc var-name bindings)))
+                       (if binding
+                           (format "%s" (cdr binding))
+                         match)))
+                   str t t)))
+      ;; If there are reactive refs, wrap with tracking overlay marker
+      (if reactive-refs
+          (twidget--apply-reactive-text result instance-id reactive-refs)
+        result))))
 
 (defun twidget--expand-template-widget (template bindings instance-id)
   "Expand widget TEMPLATE with BINDINGS.
@@ -709,24 +723,57 @@ Example:
 ;;; Reactive Data System
 ;; ============================================================================
 
-(defun twidget-get (var-name)
+(defun twidget-get (var-name &optional key-or-index)
   "Get the value of reactive data variable VAR-NAME.
-VAR-NAME should be a symbol. The value is looked up in the current widget context."
+VAR-NAME should be a symbol. The value is looked up in the current widget context.
+
+If KEY-OR-INDEX is provided:
+  - For plist values: KEY-OR-INDEX should be a keyword (e.g., :name) to get that property.
+  - For list values: KEY-OR-INDEX should be an integer index (0-based) to get that element.
+
+Examples:
+  (twidget-get \\='user)           ; Get the whole value
+  (twidget-get \\='user :name)     ; Get :name from plist
+  (twidget-get \\='items 0)        ; Get first element from list"
   (let ((key (if (symbolp var-name) (symbol-name var-name) var-name)))
     ;; Search through all instances to find the ref
     (catch 'found
-      (maphash (lambda (inst-key data)
+      (maphash (lambda (_inst-key data)
                  (let ((bindings (plist-get data :bindings)))
                    (when bindings
                      (let ((ref (plist-get bindings (intern (format ":%s" key)))))
                        (when (twidget-ref-p ref)
-                         (throw 'found (twidget-ref-value ref)))))))
+                         (let ((value (twidget-ref-value ref)))
+                           (throw 'found
+                                  (cond
+                                   ;; No key/index - return whole value
+                                   ((null key-or-index) value)
+                                   ;; Keyword access for plist
+                                   ((keywordp key-or-index)
+                                    (if (plistp value)
+                                        (plist-get value key-or-index)
+                                      (error "Cannot use keyword access on non-plist value")))
+                                   ;; Integer access for list
+                                   ((integerp key-or-index)
+                                    (if (listp value)
+                                        (nth key-or-index value)
+                                      (error "Cannot use index access on non-list value")))
+                                   (t (error "KEY-OR-INDEX must be a keyword or integer"))))))))))
                twidget-instances)
       nil)))
 
-(defun twidget-set (var-name value)
+(defun twidget-set (var-name value &optional key-or-index)
   "Set the value of reactive data variable VAR-NAME to VALUE.
-VAR-NAME should be a symbol. This triggers reactive updates in the buffer."
+VAR-NAME should be a symbol. This triggers reactive updates in the buffer.
+
+If KEY-OR-INDEX is provided:
+  - For plist values: KEY-OR-INDEX should be a keyword (e.g., :name) to set that property.
+  - For list values: KEY-OR-INDEX should be an integer index (0-based) to set that element.
+
+Examples:
+  (twidget-set \\='user new-user)           ; Set the whole value
+  (twidget-set \\='user \"John\" :name)      ; Set :name in plist
+  (twidget-set \\='items \"new-item\" 0)     ; Set first element in list"
   (let ((key (if (symbolp var-name) (symbol-name var-name) var-name)))
     ;; Search through all instances to find and update the ref
     (maphash (lambda (inst-key data)
@@ -734,13 +781,32 @@ VAR-NAME should be a symbol. This triggers reactive updates in the buffer."
                  (when bindings
                    (let ((ref (plist-get bindings (intern (format ":%s" key)))))
                      (when (twidget-ref-p ref)
-                       ;; Update the ref value
-                       (setf (twidget-ref-value ref) value)
-                       ;; Notify watchers
-                       (dolist (watcher (twidget-ref-watchers ref))
-                         (funcall watcher value))
-                       ;; Trigger buffer update
-                       (twidget--trigger-update inst-key key value))))))
+                       (let ((new-value
+                              (cond
+                               ;; No key/index - set whole value
+                               ((null key-or-index) value)
+                               ;; Keyword access for plist
+                               ((keywordp key-or-index)
+                                (let ((current (twidget-ref-value ref)))
+                                  (if (or (null current) (plistp current))
+                                      (plist-put (copy-sequence (or current nil)) key-or-index value)
+                                    (error "Cannot use keyword access on non-plist value"))))
+                               ;; Integer access for list
+                               ((integerp key-or-index)
+                                (let ((current (twidget-ref-value ref)))
+                                  (if (listp current)
+                                      (let ((new-list (copy-sequence current)))
+                                        (setf (nth key-or-index new-list) value)
+                                        new-list)
+                                    (error "Cannot use index access on non-list value"))))
+                               (t (error "KEY-OR-INDEX must be a keyword or integer")))))
+                         ;; Update the ref value
+                         (setf (twidget-ref-value ref) new-value)
+                         ;; Notify watchers
+                         (dolist (watcher (twidget-ref-watchers ref))
+                           (funcall watcher new-value))
+                         ;; Trigger buffer update
+                         (twidget--trigger-update inst-key key new-value)))))))
              twidget-instances)))
 
 (defun twidget--trigger-update (instance-id var-name value)

@@ -12,6 +12,8 @@ English | [中文](README-zh-CN.md)
 - **Slot System** - Support for single slot and named slots for flexible content composition
 - **Widget Inheritance** - Extend parent widgets to create specialized variants
 - **Text Properties** - Seamless integration with Emacs text properties
+- **Reactive Data** - Create reactive UIs with automatic updates using `twidget-ref`
+- **Composite Widgets** - Build complex widgets using `:setup` and `:template`
 
 ## Installation
 
@@ -98,7 +100,14 @@ Define a text widget named NAME.
 | `:slot` | Boolean or list. `nil` (no slot), `t` (single slot), or list of slot names |
 | `:slots` | Alias for `:slot` with named slots |
 | `:extends` | Symbol of parent widget to inherit from |
-| `:render` | Lambda function that returns rendered string |
+| `:render` | Lambda function that returns rendered string (for simple widgets) |
+| `:setup` | Lambda function that returns reactive bindings plist (for composite widgets) |
+| `:template` | Template sexp for widget structure (for composite widgets) |
+
+**Two Ways to Define Widgets:**
+
+1. **Simple Widget** - Using `:render` for direct rendering
+2. **Composite Widget** - Using `:setup` and `:template` for composition with reactive data
 
 **Render Function Signatures:**
 
@@ -194,7 +203,110 @@ Child widgets inherit properties from parent widgets, with child properties taki
   :render ...)
 ```
 
+### Composite Widgets with Reactive Data
+
+For complex widgets that compose other widgets with reactive data, use `:setup` and `:template`:
+
+```elisp
+;; Define a counter widget with reactive state
+(define-twidget my-counter
+  :setup (lambda (_props)
+           ;; Return a plist with reactive bindings
+           (list :count (twidget-ref "0")))
+  :template '(p (span "{count}")
+                " "
+                (button :action (lambda ()
+                                  (interactive)
+                                  (twidget-inc 'count 1))
+                        "+")
+                " "
+                (button :action (lambda ()
+                                  (interactive)
+                                  (twidget-dec 'count 1))
+                        "-")))
+
+;; Use the counter
+(twidget-parse '(my-counter))
+```
+
+**Key Concepts:**
+
+- **`twidget-ref`** - Creates a reactive reference. When its value changes, the UI updates automatically.
+- **`:setup`** - A function that receives props and returns a plist of reactive bindings.
+- **`:template`** - A quoted sexp defining the widget structure. Use `{varname}` for reactive placeholders.
+
+### Reactive Data API
+
+```elisp
+;; Create a reactive reference
+(twidget-ref "initial-value")
+
+;; Get a reactive value
+(twidget-get 'varname)
+
+;; Set a reactive value (triggers UI update)
+(twidget-set 'varname "new-value")
+
+;; Increment/decrement numeric values
+(twidget-inc 'varname 1)
+(twidget-dec 'varname 1)
+```
+
 ## Utility Functions
+
+### `twidget-ref`
+
+```elisp
+(twidget-ref INITIAL-VALUE)
+```
+
+Create a reactive reference with INITIAL-VALUE. Returns a twidget-ref object that can be used in `:setup` functions.
+
+### `twidget-get`
+
+```elisp
+(twidget-get SYM &optional KEY-OR-INDEX)
+```
+
+Get the current value of reactive variable SYM.
+
+For plist/list values, you can access nested values:
+- Use a keyword (e.g., `:name`) to access a plist property
+- Use an integer index (0-based) to access a list element
+
+```elisp
+;; Get the whole value
+(twidget-get 'user)
+
+;; Get :name from a plist value
+(twidget-get 'user :name)
+
+;; Get first element from a list value
+(twidget-get 'items 0)
+```
+
+### `twidget-set`
+
+```elisp
+(twidget-set SYM VALUE &optional KEY-OR-INDEX)
+```
+
+Set the value of reactive variable SYM to VALUE. This triggers reactive updates in the buffer.
+
+For plist/list values, you can set nested values:
+- Use a keyword (e.g., `:name`) to set a plist property
+- Use an integer index (0-based) to set a list element
+
+```elisp
+;; Set the whole value
+(twidget-set 'user new-user)
+
+;; Set :name in a plist value
+(twidget-set 'user "John" :name)
+
+;; Set first element in a list value
+(twidget-set 'items "new-item" 0)
+```
 
 ### `twidget-inc`
 
@@ -202,7 +314,7 @@ Child widgets inherit properties from parent widgets, with child properties taki
 (twidget-inc SYM NUM)
 ```
 
-Increment a numeric string stored in symbol SYM by NUM.
+Increment the numeric value stored in reactive variable SYM by NUM.
 
 ### `twidget-dec`
 
@@ -210,7 +322,7 @@ Increment a numeric string stored in symbol SYM by NUM.
 (twidget-dec SYM NUM)
 ```
 
-Decrement a numeric string stored in symbol SYM by NUM.
+Decrement the numeric value stored in reactive variable SYM by NUM.
 
 ## Examples
 
