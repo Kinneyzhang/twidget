@@ -58,14 +58,11 @@
 A plist is a list with an even number of elements where
 every other element (starting from the first) is a keyword."
     (and (listp object)
-         (let ((len 0)
-               (valid t)
+         (let ((valid t)
                (lst object))
            (while (and valid lst)
-             (if (keywordp (car lst))
-                 (progn
-                   (setq len (+ len 2))
-                   (setq lst (cddr lst)))
+             (if (and (keywordp (car lst)) (cdr lst))
+                 (setq lst (cddr lst))
                (setq valid nil)))
            (and valid (null lst))))))
 
@@ -218,11 +215,15 @@ There are two ways to define a widget:
         (:template (setq template (cadr rest) rest (cddr rest)))
         (_ (error "Unknown keyword %S in define-twidget" (car rest)))))
     ;; Validate: either :render or (:setup and :template) must be provided
+    ;; (unless :extends is used, which inherits from parent)
     (when (and render (or setup template))
       (error "Cannot use both :render and :setup/:template in define-twidget"))
     ;; XOR check: if one of setup/template is provided, both must be provided
     (when (not (eq (null setup) (null template)))
       (error "Both :setup and :template must be provided together"))
+    ;; Ensure at least one rendering method is provided (unless extending)
+    (when (and (not extends) (not render) (not (and setup template)))
+      (error "Widget must have :render or both :setup and :template (or use :extends)"))
     ;; Prepare slot value - the sentinel :twidget--unspecified needs to be passed as-is
     ;; Other values (t, nil, or list) should evaluate properly
     (let ((slot-form (if (eq slot :twidget--unspecified)
