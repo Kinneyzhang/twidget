@@ -59,8 +59,11 @@
 Each DEFINITION is a plist with :props, :slot, and :render keys.")
 
 (defvar-local twidget-reactive-data (make-hash-table :test 'equal)
-  "Buffer-local hash table for storing reactive data bindings.
-Keys are string variable names, values are the actual data values.")
+  "Buffer-local hash table for reactive bindings.
+Keys are variable names (strings), values are plists with:
+  :symbol - the reactive symbol for tp.el
+  :template - the template string with {placeholder}
+  :value - the current value")
 
 ;;; Widget Definition
 ;; ============================================================================
@@ -315,6 +318,7 @@ Returns the rendered string with text properties applied."
             (collected-named-slots nil)
             (slot-parts nil)
             (bind-var nil)
+            (bind-template nil)  ; Store raw template for :bind
             (for-expr nil)
             (local-bindings (copy-alist bindings)))
         ;; Parse keyword arguments first
@@ -331,12 +335,17 @@ Returns the rendered string with text properties applied."
              ;; Regular prop
              (t (push (cons key val) collected-props)))
             (setq args (cddr args))))
-        ;; Handle :bind directive - store the binding value in reactive data
+        ;; Capture raw template for :bind before substitution
+        (when (and bind-var args)
+          (setq bind-template (mapconcat
+                               (lambda (arg)
+                                 (if (stringp arg) arg (format "%s" arg)))
+                               args "")))
+        ;; Handle :bind directive - just store binding info, apply layer after render
         (when bind-var
           (let* ((bind-key (if (stringp bind-var) bind-var (symbol-name bind-var)))
                  (bind-value (cdr (assoc bind-key local-bindings))))
             (when bind-value
-              (twidget-set bind-key bind-value)
               ;; Add to local bindings for placeholder substitution
               (push (cons bind-key bind-value) local-bindings))))
         ;; Handle :for directive - iterate and return concatenated result
@@ -416,13 +425,23 @@ Ignoring arguments: %S" widget-name args)))
               (when (twidget-prop-has-default-p prop-def)
                 (setq parsed-props
                       (plist-put parsed-props prop-keyword
-                                 (twidget-prop-default prop-def))))))))
-      ;; Call the render function
-      (if extends
-          ;; With inheritance, pass parent-render as third argument
-          (funcall render-fn parsed-props slot-value parent-render-fn)
-        ;; Normal render call
-        (funcall render-fn parsed-props slot-value)))))
+                                 (twidget-prop-default prop-def)))))))
+        ;; Call the render function and apply reactive binding if :bind was used
+        (let ((result (if extends
+                          ;; With inheritance, pass parent-render as third argument
+                          (funcall render-fn parsed-props slot-value parent-render-fn)
+                        ;; Normal render call
+                        (funcall render-fn parsed-props slot-value))))
+          ;; If :bind was used, wrap result with reactive tp layer
+          (if bind-var
+              (let* ((bind-key (if (stringp bind-var) bind-var (symbol-name bind-var)))
+                     (bind-value (cdr (assoc bind-key local-bindings)))
+                     (reactive-sym (twidget--make-reactive-symbol bind-key)))
+                ;; Register the binding with template and initial value
+                (twidget--register-binding bind-key bind-template bind-value)
+                ;; Apply tp layer with reactive tp-text
+                (tp-set result `(tp-text ,(intern (format "$%s" reactive-sym)))))
+            result))))))
 
 (defun twidget-process-slot-value (val &optional bindings)
   "Process a single slot VAL, recursively parsing widget forms.
@@ -529,26 +548,60 @@ SYM is a symbol whose value is a string representation of a number."
 ;;; Reactive Data System
 ;; ============================================================================
 
+(defun twidget--make-reactive-symbol (var-name)
+  "Create the reactive symbol for VAR-NAME.
+VAR-NAME is a string. Returns the symbol used for tp.el reactive binding."
+  (intern (format "twidget--reactive-%s" var-name)))
+
+(defun twidget--register-binding (var-name template value)
+  "Register a reactive binding for VAR-NAME.
+TEMPLATE is the template string with {placeholder}.
+VALUE is the initial value.
+Returns the reactive symbol."
+  (let ((sym (twidget--make-reactive-symbol var-name))
+        (rendered (replace-regexp-in-string
+                   (regexp-quote (format "{%s}" var-name))
+                   (format "%s" value)
+                   template t t)))
+    ;; Store binding info
+    (puthash var-name
+             (list :symbol sym :template template :value value)
+             twidget-reactive-data)
+    ;; Set the reactive variable to the rendered text
+    (set sym rendered)
+    sym))
+
 (defun twidget-get (var-name)
   "Get the value of reactive data variable VAR-NAME.
-VAR-NAME should be a symbol representing the variable name."
-  (let ((key (if (symbolp var-name)
-                 (symbol-name var-name)
-               var-name)))
-    (gethash key twidget-reactive-data)))
+VAR-NAME should be a symbol or string."
+  (let* ((key (if (symbolp var-name) (symbol-name var-name) var-name))
+         (binding (gethash key twidget-reactive-data)))
+    (when binding
+      (plist-get binding :value))))
 
 (defun twidget-set (var-name value)
   "Set the value of reactive data variable VAR-NAME to VALUE.
-VAR-NAME should be a symbol representing the variable name."
-  (let ((key (if (symbolp var-name)
-                 (symbol-name var-name)
-               var-name)))
-    (puthash key value twidget-reactive-data)))
+This triggers reactive updates in the buffer via tp.el."
+  (let* ((key (if (symbolp var-name) (symbol-name var-name) var-name))
+         (binding (gethash key twidget-reactive-data)))
+    (when binding
+      (let* ((sym (plist-get binding :symbol))
+             (template (plist-get binding :template))
+             ;; Re-render the template with new value
+             (rendered (replace-regexp-in-string
+                        (regexp-quote (format "{%s}" key))
+                        (format "%s" value)
+                        template t t)))
+        ;; Update stored value
+        (puthash key
+                 (list :symbol sym :template template :value value)
+                 twidget-reactive-data)
+        ;; Set the reactive variable - tp.el will update the buffer
+        (set sym rendered)))))
 
 (defun twidget-substitute-placeholders (str bindings)
   "Substitute {variable} placeholders in STR with values from BINDINGS.
-BINDINGS is an alist of (VAR-NAME . VALUE) pairs.
-If a placeholder is not found in BINDINGS, it tries `twidget-reactive-data'."
+BINDINGS is an alist of (VAR-NAME . VALUE) pairs."
   (if (stringp str)
       (replace-regexp-in-string
        "{\\([^}]+\\)}"
@@ -557,11 +610,7 @@ If a placeholder is not found in BINDINGS, it tries `twidget-reactive-data'."
                 (binding (assoc var-name bindings)))
            (if binding
                (format "%s" (cdr binding))
-             ;; Try reactive data store
-             (let ((reactive-val (gethash var-name twidget-reactive-data)))
-               (if reactive-val
-                   (format "%s" reactive-val)
-                 match)))))
+             match)))
        str t t)
     str))
 
