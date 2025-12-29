@@ -109,9 +109,7 @@ When the value changes, the UI will be updated automatically."
 
 (defun twidget--generate-instance-id ()
   "Generate a unique instance ID for a widget instance."
-  (format "twidget-instance-%d-%s"
-          (cl-incf twidget--instance-counter)
-          (format-time-string "%s%N")))
+  (format "twidget-instance-%d" (cl-incf twidget--instance-counter)))
 
 (defun twidget--register-ref (instance-id var-name ref)
   "Register a reactive REF for INSTANCE-ID with VAR-NAME."
@@ -215,7 +213,7 @@ There are two ways to define a widget:
     ;; Validate: either :render or (:setup and :template) must be provided
     (when (and render (or setup template))
       (error "Cannot use both :render and :setup/:template in define-twidget"))
-    (when (and (not render) (or setup template) (not (and setup template)))
+    (when (cl-set-exclusive-or (list setup) (list template))
       (error "Both :setup and :template must be provided together"))
     ;; Prepare slot value - the sentinel :twidget--unspecified needs to be passed as-is
     ;; Other values (t, nil, or list) should evaluate properly
@@ -789,16 +787,22 @@ Examples:
                                ((keywordp key-or-index)
                                 (let ((current (twidget-ref-value ref)))
                                   (if (or (null current) (plistp current))
-                                      (plist-put (copy-sequence (or current nil)) key-or-index value)
+                                      (plist-put (if current (copy-sequence current) nil)
+                                                 key-or-index value)
                                     (error "Cannot use keyword access on non-plist value"))))
                                ;; Integer access for list
                                ((integerp key-or-index)
                                 (let ((current (twidget-ref-value ref)))
-                                  (if (listp current)
-                                      (let ((new-list (copy-sequence current)))
-                                        (setf (nth key-or-index new-list) value)
-                                        new-list)
-                                    (error "Cannot use index access on non-list value"))))
+                                  (cond
+                                   ((not (listp current))
+                                    (error "Cannot use index access on non-list value"))
+                                   ((or (< key-or-index 0) (>= key-or-index (length current)))
+                                    (error "Index %d out of bounds for list of length %d"
+                                           key-or-index (length current)))
+                                   (t
+                                    (let ((new-list (copy-sequence current)))
+                                      (setcar (nthcdr key-or-index new-list) value)
+                                      new-list)))))
                                (t (error "KEY-OR-INDEX must be a keyword or integer")))))
                          ;; Update the ref value
                          (setf (twidget-ref-value ref) new-value)
