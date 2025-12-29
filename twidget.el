@@ -148,7 +148,8 @@ Examples:
 
 (defun twidget--get-nested-value (value accessor)
   "Get the nested VALUE using ACCESSOR.
-ACCESSOR is nil (return whole value), a keyword (plist access), or an integer (list access)."
+ACCESSOR is nil (return whole value), a keyword (plist access), or an integer (list access).
+Throws an error if the accessor is out of bounds for lists."
   (cond
    ((null accessor) value)
    ((keywordp accessor)
@@ -156,9 +157,14 @@ ACCESSOR is nil (return whole value), a keyword (plist access), or an integer (l
         (plist-get value accessor)
       (error "Cannot use keyword access on non-plist value")))
    ((integerp accessor)
-    (if (listp value)
-        (nth accessor value)
-      (error "Cannot use index access on non-list value")))
+    (cond
+     ((not (listp value))
+      (error "Cannot use index access on non-list value"))
+     ((null value)
+      (error "Cannot access index %d of empty list" accessor))
+     ((or (< accessor 0) (>= accessor (length value)))
+      (error "Index %d out of bounds for list of length %d" accessor (length value)))
+     (t (nth accessor value))))
    (t value)))
 
 (defun twidget--apply-reactive-text (text instance-id var-name)
@@ -877,8 +883,7 @@ Examples:
                                ((keywordp key-or-index)
                                 (let ((current (twidget-ref-value ref)))
                                   (if (or (null current) (plistp current))
-                                      (plist-put (if current (copy-sequence current) nil)
-                                                 key-or-index value)
+                                      (plist-put (copy-sequence current) key-or-index value)
                                     (error "Cannot use keyword access on non-plist value"))))
                                ;; Integer access for list
                                ((integerp key-or-index)
@@ -950,8 +955,8 @@ Supports dot notation for nested access:
       (replace-regexp-in-string
        "{\\([^}]+\\)}"
        (lambda (match)
-         ;; Extract the variable expression from the match
-         (let* ((var-expr (substring match 1 -1)) ; Remove { and }
+         ;; Extract the variable expression from the first capture group
+         (let* ((var-expr (match-string 1 match))
                 ;; Parse dot notation
                 (parsed (twidget--parse-dot-notation var-expr))
                 (base-var (car parsed))
