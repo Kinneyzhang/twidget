@@ -333,14 +333,8 @@ Returns the rendered string with text properties applied."
             (setq args (cddr args))))
         ;; Handle :bind directive - store the binding value in reactive data
         (when bind-var
-          (let ((bind-key (if (stringp bind-var) bind-var (symbol-name bind-var)))
-                (bind-value (cdr (assoc bind-var local-bindings))))
-            ;; If we have a binding from loop context, use it
-            ;; Otherwise try to get from lexical scope via eval
-            (unless bind-value
-              (condition-case nil
-                  (setq bind-value (eval (intern bind-key)))
-                (error nil)))
+          (let* ((bind-key (if (stringp bind-var) bind-var (symbol-name bind-var)))
+                 (bind-value (cdr (assoc bind-key local-bindings))))
             (when bind-value
               (twidget-set bind-key bind-value)
               ;; Add to local bindings for placeholder substitution
@@ -351,11 +345,8 @@ Returns the rendered string with text properties applied."
             (if parsed
                 (let* ((loop-var (car parsed))
                        (collection-name (cdr parsed))
-                       ;; First check bindings, then try symbol-value for dynamic scope
-                       (collection (or (cdr (assoc collection-name local-bindings))
-                                       (condition-case nil
-                                           (symbol-value (intern collection-name))
-                                         (error nil))))
+                       ;; Get collection from bindings
+                       (collection (cdr (assoc collection-name local-bindings)))
                        (results nil))
                   (if (listp collection)
                       (progn
@@ -497,6 +488,9 @@ Returns a list of unique variable name symbols."
 FORM should be a quoted widget form. This macro automatically captures
 lexical variables referenced in :bind and :for directives.
 
+Note: For variable capture to work, FORM must be a quoted literal.
+Dynamic forms at runtime cannot capture lexical variables.
+
 Example:
   (let ((editor \"emacs\")
         (editors \\='(\"emacs\" \"vim\" \"vscode\")))
@@ -512,11 +506,8 @@ Example:
                                            `(cons ,(symbol-name var) ,var))
                                          vars))))
            (insert (twidget-parse ',widget-form bindings))))
-    ;; Runtime extraction (fallback)
-    `(let* ((widget-form ,form)
-            (vars (twidget-extract-variables widget-form))
-            (bindings nil))
-       (insert (twidget-parse widget-form bindings)))))
+    ;; Runtime extraction (fallback) - cannot capture lexical variables
+    `(insert (twidget-parse ,form nil))))
 
 ;;; Utilities
 ;; ============================================================================
@@ -574,10 +565,22 @@ If a placeholder is not found in BINDINGS, it tries `twidget-reactive-data'."
        str t t)
     str))
 
+(defconst twidget--for-expression-rx
+  (rx line-start
+      (* whitespace)
+      (group (+ (any alpha "_")) (* (any alnum "_")))  ; loop variable
+      (+ whitespace)
+      "in"
+      (+ whitespace)
+      (group (+ (any alpha "_")) (* (any alnum "_")))  ; collection name
+      (* whitespace)
+      line-end)
+  "Regular expression to parse :for expressions like \"item in items\".")
+
 (defun twidget-parse-for-expression (for-expr)
   "Parse a :for expression like \"item in items\".
 Returns a cons cell (LOOP-VAR . COLLECTION-NAME) or nil if invalid."
-  (when (string-match "^\\s-*\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-+in\\s-+\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*$" for-expr)
+  (when (string-match twidget--for-expression-rx for-expr)
     (cons (match-string 1 for-expr)
           (match-string 2 for-expr))))
 
