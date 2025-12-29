@@ -56,14 +56,65 @@
 
 (defvar twidget-alist nil
   "Alist of widget definitions: (WIDGET-NAME . DEFINITION).
-Each DEFINITION is a plist with :props, :slot, and :render keys.")
+Each DEFINITION is a plist with :props, :slot, :render, :setup, and :template keys.")
 
 (defvar-local twidget-reactive-data (make-hash-table :test 'equal)
-  "Buffer-local hash table for reactive bindings.
+  "Buffer-local hash table for reactive data.
 Keys are variable names (strings), values are plists with:
-  :symbol - the reactive symbol for tp.el
-  :template - the template string with {placeholder}
-  :value - the current value")
+  :value - the current value
+  :watchers - list of functions to call when value changes")
+
+(defvar-local twidget-instances (make-hash-table :test 'equal)
+  "Buffer-local hash table for widget instances.
+Keys are instance IDs (strings), values are plists with:
+  :bindings - the reactive bindings plist from setup
+  :template - the template sexp
+  :overlays - list of overlays for reactive updates")
+
+(defvar-local twidget-ref-registry (make-hash-table :test 'equal)
+  "Buffer-local hash table for reactive ref tracking.
+Keys are (instance-id . var-name), values are the ref objects.")
+
+(defvar twidget--instance-counter 0
+  "Counter for generating unique instance IDs.")
+
+;;; Reactive Reference (twidget-ref)
+;; ============================================================================
+
+(cl-defstruct (twidget-ref (:constructor twidget-ref--create))
+  "A reactive reference that triggers updates when its value changes."
+  value      ; The current value
+  watchers)  ; List of watcher functions
+
+(defun twidget-ref (initial-value)
+  "Create a reactive reference with INITIAL-VALUE.
+Returns a twidget-ref object that can be used in templates.
+When the value changes, the UI will be updated automatically."
+  (twidget-ref--create :value initial-value :watchers nil))
+
+(defun twidget-ref-p (obj)
+  "Return non-nil if OBJ is a twidget-ref."
+  (cl-typep obj 'twidget-ref))
+
+(defun twidget--generate-instance-id ()
+  "Generate a unique instance ID for a widget instance."
+  (format "twidget-instance-%d-%s"
+          (cl-incf twidget--instance-counter)
+          (format-time-string "%s%N")))
+
+(defun twidget--register-ref (instance-id var-name ref)
+  "Register a reactive REF for INSTANCE-ID with VAR-NAME."
+  (puthash (cons instance-id var-name) ref twidget-ref-registry))
+
+(defun twidget--apply-reactive-text (text instance-id reactive-vars)
+  "Apply reactive tracking to TEXT for INSTANCE-ID.
+REACTIVE-VARS is a list of variable names that are reactive in this text.
+Returns text with tp.el properties for reactive updates."
+  ;; For now, return text directly - reactive updates will be handled via overlays
+  ;; when we implement the buffer insertion with twidget-render
+  (let ((sym (intern (format "twidget--text-%s" instance-id))))
+    (set sym text)
+    (tp-set text (list 'tp-text (intern (format "$%s" sym))))))
 
 ;;; Widget Definition
 ;; ============================================================================
@@ -71,61 +122,73 @@ Keys are variable names (strings), values are plists with:
 (defmacro define-twidget (name &rest args)
   "Define a text widget (widget) named NAME.
 
-ARGS should include:
-  :props - A quoted list of property definitions. Each can be:
-           - A symbol: required property accessed via keyword
-           - A cons cell (SYMBOL . DEFAULT): property with default value
-  :slot  - Boolean value or list of slot names.
-           nil (default) means widget does not support slot.
-           t means widget supports a single default slot.
-           A list of symbols defines named slots, e.g., \\='(header content footer)
-  :slots - Alias for :slot with named slots (for clarity)
-  :extends - Symbol of a parent widget to inherit from.
-             The child widget inherits :props and :slot from the parent.
-             Child :props override parent defaults; child :render can call parent-render.
-  :render - A lambda that returns the rendered string.
-            For single slot: (lambda (props slot) ...)
-            For named slots: (lambda (props slots) ...) where slots is a plist
-            When :extends is used: (lambda (props slot parent-render) ...)
+There are two ways to define a widget:
 
-The render function receives:
-  - PROPS: a plist of resolved property values (with :keyword keys)
-  - SLOT/SLOTS: For single slot (t), a string containing all slot values.
-                For named slots, a plist with slot names as keywords.
-  - PARENT-RENDER: When :extends is used, a function to call parent's render.
+1. Simple Widget (using :render):
+   For widgets that directly render to a string.
 
-Named Slots Example:
-  (define-twidget card
-    :slots \\='(header content footer)
-    :render (lambda (props slots)
-              (concat (plist-get slots :header) \"\\n\"
-                      (plist-get slots :content) \"\\n\"
-                      (plist-get slots :footer))))
+   ARGS should include:
+     :props - A quoted list of property definitions. Each can be:
+              - A symbol: required property accessed via keyword
+              - A cons cell (SYMBOL . DEFAULT): property with default value
+     :slot  - Boolean value or list of slot names.
+              nil (default) means widget does not support slot.
+              t means widget supports a single default slot.
+              A list of symbols defines named slots.
+     :slots - Alias for :slot with named slots (for clarity)
+     :extends - Symbol of a parent widget to inherit from.
+     :render - A lambda that returns the rendered string.
+               For single slot: (lambda (props slot) ...)
+               For named slots: (lambda (props slots) ...) where slots is a plist
+               When :extends is used: (lambda (props slot parent-render) ...)
 
-  ;; Usage - named slots use (slot<name> content...) sexp format:
-  (twidget-parse
-   \\='(card (slot-header \"Title\")
-          (slot-content \"Body text\")
-          (slot-footer \"Footer\")))
+   Example:
+     (define-twidget button
+       :slot t
+       :props \\='(action (bgcolor . \"orange\"))
+       :render (lambda (props slot)
+                 (let ((action (plist-get props :action))
+                       (bgcolor (plist-get props :bgcolor)))
+                   (tp-add (format \"%s%s%s\"
+                                   (tp-set \" \" \\='tp-space 6)
+                                   slot (tp-set \" \" \\='tp-space 6))
+                           \\='tp-button `(:bgcolor ,bgcolor :action ,action)))))
 
-Component Inheritance Example:
-  (define-twidget base-button
-    :props \\='((type . \"default\"))
-    :slot t
-    :render (lambda (props slot)
-              (tp-set slot \\='face \\='button)))
+2. Composite Widget (using :setup and :template):
+   For widgets that compose other widgets with reactive data.
 
-  (define-twidget primary-button
-    :extends \\='base-button
-    :props \\='((type . \"primary\"))
-    :render (lambda (props slot parent-render)
-              (let ((result (funcall parent-render props slot)))
-                (tp-add result \\='face \\='(:foreground \"blue\")))))"
+   ARGS should include:
+     :props - Same as above
+     :slot  - Same as above
+     :setup - A lambda that receives props and returns a plist of reactive bindings.
+              Use `twidget-ref' to create reactive values.
+              (lambda (props) (list :count (twidget-ref \"0\")))
+     :template - A quoted template sexp that defines the widget structure.
+                 Use {varname} syntax in strings to bind to reactive data.
+                 Template elements can be nested widget forms.
+
+   Example:
+     (define-twidget my-counter
+       :setup (lambda (_props)
+                (list :count (twidget-ref \"0\")))
+       :template \\='(p (span \"{count}\")
+                      \" \"
+                      (button :action (lambda ()
+                                        (interactive)
+                                        (twidget-inc \\='count 1))
+                              \"+\")
+                      \" \"
+                      (button :action (lambda ()
+                                        (interactive)
+                                        (twidget-dec \\='count 1))
+                              \"-\")))"
   (declare (indent defun))
   (let ((props nil)
         (slot :twidget--unspecified)  ; Sentinel value to detect if :slot was provided
         (extends nil)
         (render nil)
+        (setup nil)
+        (template nil)
         (rest args))
     ;; Parse keyword arguments
     (while rest
@@ -135,7 +198,15 @@ Component Inheritance Example:
         (:slots (setq slot (cadr rest) rest (cddr rest)))  ; Alias for named slots
         (:extends (setq extends (cadr rest) rest (cddr rest)))
         (:render (setq render (cadr rest) rest (cddr rest)))
+        (:setup (setq setup (cadr rest) rest (cddr rest)))
+        (:template (setq template (cadr rest) rest (cddr rest)))
         (_ (error "Unknown keyword %S in define-twidget" (car rest)))))
+    ;; Validate: either :render or (:setup and :template) must be provided
+    (when (and render (or setup template))
+      (error "Cannot use both :render and :setup/:template in define-twidget"))
+    (when (and (not render) (not (and setup template)))
+      (when (or setup template)
+        (error "Both :setup and :template must be provided together")))
     ;; Prepare slot value - the sentinel :twidget--unspecified needs to be passed as-is
     ;; Other values (t, nil, or list) should evaluate properly
     (let ((slot-form (if (eq slot :twidget--unspecified)
@@ -143,14 +214,16 @@ Component Inheritance Example:
                        ;; If slot is a quoted list (from ':slots '(x y z)),
                        ;; the value is actually (quote (x y z)), so we just pass it
                        slot)))
-      `(twidget-internal ',name ,props ,slot-form ,extends ,render))))
+      `(twidget-internal ',name ,props ,slot-form ,extends ,render ,setup ,template))))
 
-(defun twidget-internal (name props slot extends render)
-  "Internal function to define a widget NAME with PROPS, SLOT, EXTENDS, and RENDER.
+(defun twidget-internal (name props slot extends render setup template)
+  "Internal function to define a widget NAME with PROPS, SLOT, EXTENDS, RENDER, SETUP, and TEMPLATE.
 PROPS is a list of property definitions.
 SLOT is a boolean, list of slot names, or :twidget--unspecified (not provided).
 EXTENDS is a symbol of a parent widget to inherit from.
-RENDER is the render function."
+RENDER is the render function (for simple widgets).
+SETUP is a function that returns reactive bindings (for composite widgets).
+TEMPLATE is a template sexp (for composite widgets)."
   ;; Handle inheritance if :extends is specified
   (let* ((slot-was-specified (not (eq slot :twidget--unspecified)))
          (final-slot (if slot-was-specified slot nil))
@@ -181,7 +254,9 @@ RENDER is the render function."
                             :slot final-slot
                             :extends extends
                             :parent-render parent-render
-                            :render render))
+                            :render render
+                            :setup setup
+                            :template template))
           (existing (assoc name twidget-alist)))
       (if existing
           (setcdr existing definition)
@@ -277,7 +352,6 @@ For named slots, use (slot-<name> content...) sexp format:
                (slot-content \"Content\"))
 
 Special directives:
-  :bind - Bind a reactive data variable, e.g., :bind \"varname\"
   :for  - Loop over a collection, e.g., :for \"item in items\"
 
 Keyword arguments must come before slot values. Slot values are all
@@ -317,8 +391,6 @@ Returns the rendered string with text properties applied."
             (collected-props nil)
             (collected-named-slots nil)
             (slot-parts nil)
-            (bind-var nil)
-            (bind-template nil)  ; Store raw template for :bind
             (for-expr nil)
             (local-bindings (copy-alist bindings)))
         ;; Parse keyword arguments first
@@ -326,28 +398,12 @@ Returns the rendered string with text properties applied."
           (let ((key (car args))
                 (val (cadr args)))
             (cond
-             ;; Handle :bind directive
-             ((eq key :bind)
-              (setq bind-var val))
              ;; Handle :for directive
              ((eq key :for)
               (setq for-expr val))
              ;; Regular prop
              (t (push (cons key val) collected-props)))
             (setq args (cddr args))))
-        ;; Capture raw template for :bind before substitution
-        (when (and bind-var args)
-          (setq bind-template (mapconcat
-                               (lambda (arg)
-                                 (if (stringp arg) arg (format "%s" arg)))
-                               args "")))
-        ;; Handle :bind directive - just store binding info, apply layer after render
-        (when bind-var
-          (let* ((bind-key (if (stringp bind-var) bind-var (symbol-name bind-var)))
-                 (bind-value (cdr (assoc bind-key local-bindings))))
-            (when bind-value
-              ;; Add to local bindings for placeholder substitution
-              (push (cons bind-key bind-value) local-bindings))))
         ;; Handle :for directive - iterate and return concatenated result
         (when for-expr
           (let ((parsed (twidget-parse-for-expression for-expr)))
@@ -426,22 +482,150 @@ Ignoring arguments: %S" widget-name args)))
                 (setq parsed-props
                       (plist-put parsed-props prop-keyword
                                  (twidget-prop-default prop-def)))))))
-        ;; Call the render function and apply reactive binding if :bind was used
-        (let ((result (if extends
-                          ;; With inheritance, pass parent-render as third argument
-                          (funcall render-fn parsed-props slot-value parent-render-fn)
-                        ;; Normal render call
-                        (funcall render-fn parsed-props slot-value))))
-          ;; If :bind was used, wrap result with reactive tp layer
-          (if bind-var
-              (let* ((bind-key (if (stringp bind-var) bind-var (symbol-name bind-var)))
-                     (bind-value (cdr (assoc bind-key local-bindings)))
-                     (reactive-sym (twidget--make-reactive-symbol bind-key)))
-                ;; Register the binding with template and initial value
-                (twidget--register-binding bind-key bind-template bind-value)
-                ;; Apply tp layer with reactive tp-text
-                (tp-set result `(tp-text ,(intern (format "$%s" reactive-sym)))))
-            result))))))
+        ;; Check if this is a composite widget (has :setup and :template)
+        (let ((setup-fn (plist-get definition :setup))
+              (template (plist-get definition :template)))
+          (if (and setup-fn template)
+              ;; Composite widget: call setup, expand template, and render
+              (twidget--render-composite setup-fn template parsed-props slot-value)
+            ;; Simple widget: call the render function
+            (if extends
+                ;; With inheritance, pass parent-render as third argument
+                (funcall render-fn parsed-props slot-value parent-render-fn)
+              ;; Normal render call
+              (funcall render-fn parsed-props slot-value))))))))
+
+(defun twidget--render-composite (setup-fn template props slot)
+  "Render a composite widget using SETUP-FN and TEMPLATE.
+SETUP-FN is a function that receives props and returns reactive bindings.
+TEMPLATE is a template sexp to expand and render.
+PROPS is the parsed props plist.
+SLOT is the slot value (if any)."
+  ;; Call setup function to get reactive bindings
+  (let* ((reactive-bindings (funcall setup-fn props))
+         (instance-id (twidget--generate-instance-id))
+         (bindings nil))
+    ;; Process reactive bindings from setup
+    ;; Convert reactive refs to bindings for template substitution
+    (let ((plist reactive-bindings))
+      (while plist
+        (let ((key (car plist))
+              (val (cadr plist)))
+          (when (keywordp key)
+            (let* ((var-name (substring (symbol-name key) 1))
+                   (ref-value (if (twidget-ref-p val)
+                                  (twidget-ref-value val)
+                                val)))
+              ;; Register reactive ref if it is one
+              (when (twidget-ref-p val)
+                (twidget--register-ref instance-id var-name val))
+              (push (cons var-name ref-value) bindings))))
+        (setq plist (cddr plist))))
+    ;; Store instance info for reactivity
+    (puthash instance-id
+             (list :bindings reactive-bindings :template template)
+             twidget-instances)
+    ;; Expand and render the template
+    (twidget--expand-template template bindings instance-id)))
+
+(defun twidget--expand-template (template bindings instance-id)
+  "Expand TEMPLATE sexp into rendered string.
+TEMPLATE is a widget form or list of forms.
+BINDINGS is an alist of (VAR-NAME . VALUE) for placeholder substitution.
+INSTANCE-ID is the widget instance identifier for reactivity."
+  (cond
+   ;; String - substitute placeholders and wrap with reactive overlay if needed
+   ((stringp template)
+    (twidget--expand-template-string template bindings instance-id))
+   ;; Widget form - parse it with bindings
+   ((and (listp template)
+         (symbolp (car template))
+         (assoc (car template) twidget-alist))
+    (twidget--expand-template-widget template bindings instance-id))
+   ;; List of forms - process each
+   ((listp template)
+    (mapconcat (lambda (form)
+                 (twidget--expand-template form bindings instance-id))
+               template ""))
+   ;; Other - convert to string
+   (t (format "%s" template))))
+
+(defun twidget--expand-template-string (str bindings instance-id)
+  "Expand STR template string with BINDINGS.
+INSTANCE-ID is used for reactive tracking."
+  (let ((result str)
+        (reactive-refs nil))
+    ;; Find all {varname} placeholders
+    (while (string-match "{\\([^}]+\\)}" result)
+      (let* ((var-name (match-string 1 result))
+             (binding (assoc var-name bindings))
+             (ref-info (gethash (cons instance-id var-name) twidget-ref-registry)))
+        (if binding
+            (let ((value (cdr binding)))
+              ;; Track if this is a reactive ref
+              (when ref-info
+                (push var-name reactive-refs))
+              (setq result (replace-match (format "%s" value) t t result)))
+          ;; No binding found, leave placeholder as is
+          (setq result (replace-match (match-string 0 result) t t result)))))
+    ;; If there are reactive refs, wrap with tracking overlay marker
+    (if reactive-refs
+        (twidget--apply-reactive-text result instance-id reactive-refs)
+      result)))
+
+(defun twidget--expand-template-widget (template bindings instance-id)
+  "Expand widget TEMPLATE with BINDINGS.
+INSTANCE-ID is used for reactive tracking."
+  (let ((widget-name (car template))
+        (rest (cdr template)))
+    ;; Process the widget arguments to substitute bindings
+    (let ((processed-args (twidget--process-template-args rest bindings instance-id)))
+      (twidget-parse (cons widget-name processed-args) bindings))))
+
+(defun twidget--process-template-args (args bindings instance-id)
+  "Process template ARGS, substituting BINDINGS.
+INSTANCE-ID is used for reactive tracking.
+Returns the processed argument list."
+  (let ((result nil))
+    (while args
+      (let ((arg (car args)))
+        (cond
+         ;; Keyword - keep as is, process next arg
+         ((keywordp arg)
+          (push arg result)
+          (setq args (cdr args))
+          (when args
+            (push (twidget--process-template-arg (car args) bindings instance-id) result)
+            (setq args (cdr args))))
+         ;; Other - process and add
+         (t
+          (push (twidget--process-template-arg arg bindings instance-id) result)
+          (setq args (cdr args))))))
+    (nreverse result)))
+
+(defun twidget--process-template-arg (arg bindings instance-id)
+  "Process a single template ARG with BINDINGS.
+INSTANCE-ID is used for reactive tracking."
+  (cond
+   ;; String - substitute placeholders
+   ((stringp arg)
+    (twidget--expand-template-string arg bindings instance-id))
+   ;; Widget form - expand it
+   ((and (listp arg)
+         (symbolp (car arg))
+         (assoc (car arg) twidget-alist))
+    (twidget--expand-template arg bindings instance-id))
+   ;; Lambda/function - return as is
+   ((functionp arg) arg)
+   ;; List that might be a lambda form
+   ((and (listp arg) (eq (car arg) 'lambda)) arg)
+   ;; Other list - might need recursive processing
+   ((listp arg)
+    (mapcar (lambda (x)
+              (twidget--process-template-arg x bindings instance-id))
+            arg))
+   ;; Other - return as is
+   (t arg)))
 
 (defun twidget-process-slot-value (val &optional bindings)
   "Process a single slot VAL, recursively parsing widget forms.
@@ -471,7 +655,7 @@ substitution."
   (setq twidget-alist nil))
 
 (defun twidget-extract-variables (form)
-  "Extract variable names referenced in :bind and :for directives from FORM.
+  "Extract variable names referenced in :for directives from FORM.
 Returns a list of unique variable name symbols."
   (let ((vars nil))
     (cond
@@ -479,19 +663,15 @@ Returns a list of unique variable name symbols."
      ((and (listp form) (symbolp (car form)))
       ;; This is a widget form or subform
       (let ((rest (cdr form)))
-        ;; Look for :bind and :for in keyword arguments
+        ;; Look for :for in keyword arguments
         (while (and rest (keywordp (car rest)))
           (let ((key (car rest))
                 (val (cadr rest)))
-            (cond
-             ((eq key :bind)
-              (when (stringp val)
-                (push (intern val) vars)))
-             ((eq key :for)
+            (when (eq key :for)
               (when (stringp val)
                 (let ((parsed (twidget-parse-for-expression val)))
                   (when parsed
-                    (push (intern (cdr parsed)) vars))))))
+                    (push (intern (cdr parsed)) vars)))))
             (setq rest (cddr rest))))
         ;; Recursively check remaining elements
         (dolist (elem rest)
@@ -505,17 +685,15 @@ Returns a list of unique variable name symbols."
 (defmacro twidget-insert (form)
   "Insert the rendered widget FORM at point, auto-capturing referenced variables.
 FORM should be a quoted widget form. This macro automatically captures
-lexical variables referenced in :bind and :for directives.
+lexical variables referenced in :for directives.
 
 Note: For variable capture to work, FORM must be a quoted literal.
 Dynamic forms at runtime cannot capture lexical variables.
 
 Example:
-  (let ((editor \"emacs\")
-        (editors \\='(\"emacs\" \"vim\" \"vscode\")))
+  (let ((editors \\='(\"emacs\" \"vim\" \"vscode\")))
     (twidget-insert
-     \\='(div (p :bind \"editor\" \"Using {editor}\")
-           (p :for \"e in editors\" \"Editor: {e}\"))))"
+     \\='(div (p :for \"e in editors\" \"Editor: {e}\"))))"
   (declare (indent 0))
   ;; Extract variables at compile time if form is a quoted list
   (if (and (listp form) (eq (car form) 'quote))
@@ -531,56 +709,66 @@ Example:
 ;;; Reactive Data System
 ;; ============================================================================
 
-(defun twidget--make-reactive-symbol (var-name)
-  "Create the reactive symbol for VAR-NAME.
-VAR-NAME is a string. Returns the symbol used for tp.el reactive binding."
-  (intern (format "twidget--reactive-%s" var-name)))
-
-(defun twidget--render-template (template var-name value)
-  "Render TEMPLATE by substituting {VAR-NAME} with VALUE."
-  (replace-regexp-in-string
-   (regexp-quote (format "{%s}" var-name))
-   (format "%s" value)
-   template t t))
-
-(defun twidget--register-binding (var-name template value)
-  "Register a reactive binding for VAR-NAME.
-TEMPLATE is the template string with {placeholder}.
-VALUE is the initial value.
-Returns the reactive symbol."
-  (let ((sym (twidget--make-reactive-symbol var-name))
-        (rendered (twidget--render-template template var-name value)))
-    ;; Store binding info
-    (puthash var-name
-             (list :symbol sym :template template :value value)
-             twidget-reactive-data)
-    ;; Set the reactive variable to the rendered text
-    (set sym rendered)
-    sym))
-
 (defun twidget-get (var-name)
   "Get the value of reactive data variable VAR-NAME.
-VAR-NAME should be a symbol or string."
-  (let* ((key (if (symbolp var-name) (symbol-name var-name) var-name))
-         (binding (gethash key twidget-reactive-data)))
-    (when binding
-      (plist-get binding :value))))
+VAR-NAME should be a symbol. The value is looked up in the current widget context."
+  (let ((key (if (symbolp var-name) (symbol-name var-name) var-name)))
+    ;; Search through all instances to find the ref
+    (catch 'found
+      (maphash (lambda (inst-key data)
+                 (let ((bindings (plist-get data :bindings)))
+                   (when bindings
+                     (let ((ref (plist-get bindings (intern (format ":%s" key)))))
+                       (when (twidget-ref-p ref)
+                         (throw 'found (twidget-ref-value ref)))))))
+               twidget-instances)
+      nil)))
 
 (defun twidget-set (var-name value)
   "Set the value of reactive data variable VAR-NAME to VALUE.
-This triggers reactive updates in the buffer via tp.el."
-  (let* ((key (if (symbolp var-name) (symbol-name var-name) var-name))
-         (binding (gethash key twidget-reactive-data)))
-    (when binding
-      (let* ((sym (plist-get binding :symbol))
-             (template (plist-get binding :template))
-             (rendered (twidget--render-template template key value)))
-        ;; Update stored value
-        (puthash key
-                 (list :symbol sym :template template :value value)
-                 twidget-reactive-data)
-        ;; Set the reactive variable - tp.el will update the buffer
-        (set sym rendered)))))
+VAR-NAME should be a symbol. This triggers reactive updates in the buffer."
+  (let ((key (if (symbolp var-name) (symbol-name var-name) var-name)))
+    ;; Search through all instances to find and update the ref
+    (maphash (lambda (inst-key data)
+               (let ((bindings (plist-get data :bindings)))
+                 (when bindings
+                   (let ((ref (plist-get bindings (intern (format ":%s" key)))))
+                     (when (twidget-ref-p ref)
+                       ;; Update the ref value
+                       (setf (twidget-ref-value ref) value)
+                       ;; Notify watchers
+                       (dolist (watcher (twidget-ref-watchers ref))
+                         (funcall watcher value))
+                       ;; Trigger buffer update
+                       (twidget--trigger-update inst-key key value))))))
+             twidget-instances)))
+
+(defun twidget--trigger-update (instance-id var-name value)
+  "Trigger a reactive update for INSTANCE-ID when VAR-NAME changes to VALUE.
+This uses tp.el to update the text in the buffer."
+  (let* ((data (gethash instance-id twidget-instances))
+         (template (plist-get data :template))
+         (bindings (plist-get data :bindings))
+         (sym (intern (format "twidget--text-%s" instance-id))))
+    (when (and data template)
+      ;; Rebuild bindings alist with current values
+      (let ((new-bindings nil))
+        (let ((plist bindings))
+          (while plist
+            (let ((key (car plist))
+                  (val (cadr plist)))
+              (when (keywordp key)
+                (let* ((name (substring (symbol-name key) 1))
+                       (ref-value (if (twidget-ref-p val)
+                                      (twidget-ref-value val)
+                                    val)))
+                  (push (cons name ref-value) new-bindings))))
+            (setq plist (cddr plist))))
+        ;; Re-render the template with updated bindings
+        (let ((new-text (twidget--expand-template template new-bindings instance-id)))
+          ;; Update the reactive symbol - tp.el will handle buffer update
+          (when (boundp sym)
+            (set sym new-text)))))))
 
 (defun twidget-substitute-placeholders (str bindings)
   "Substitute {variable} placeholders in STR with values from BINDINGS.
@@ -620,20 +808,46 @@ Returns a cons cell (LOOP-VAR . COLLECTION-NAME) or nil if invalid."
 ;; ============================================================================
 
 (defun twidget-inc (sym num)
-  "Increment the numeric string value stored in SYM by NUM.
-SYM is a symbol whose value is a string representation of a number."
-  (let ((str (twidget-get sym)))
-    (twidget-set
-     (make-local-variable sym)
-     (number-to-string (+ (string-to-number str) num)))))
+  "Increment the numeric value stored in reactive variable SYM by NUM.
+SYM is a symbol. The value can be a string or number."
+  (let* ((current (twidget-get sym))
+         (current-num (if (stringp current)
+                          (string-to-number current)
+                        (or current 0)))
+         (new-val (+ current-num num)))
+    (twidget-set sym (if (stringp current)
+                         (number-to-string new-val)
+                       new-val))))
 
 (defun twidget-dec (sym num)
-  "Decrement the numeric string value stored in SYM by NUM.
-SYM is a symbol whose value is a string representation of a number."
-  (let ((str (twidget-get sym)))
-    (twidget-set
-     (make-local-variable sym)
-     (number-to-string (- (string-to-number str) num)))))
+  "Decrement the numeric value stored in reactive variable SYM by NUM.
+SYM is a symbol. The value can be a string or number."
+  (let* ((current (twidget-get sym))
+         (current-num (if (stringp current)
+                          (string-to-number current)
+                        (or current 0)))
+         (new-val (- current-num num)))
+    (twidget-set sym (if (stringp current)
+                         (number-to-string new-val)
+                       new-val))))
+
+(defun twidget-reactive (var-name &optional initial-value)
+  "Create or get a reactive variable named VAR-NAME.
+If INITIAL-VALUE is provided, create a new reactive variable.
+Returns the twidget-ref object."
+  (let ((key (if (symbolp var-name) (symbol-name var-name) var-name)))
+    ;; Look for existing ref or create new one
+    (catch 'found
+      (maphash (lambda (inst-key data)
+                 (let ((bindings (plist-get data :bindings)))
+                   (when bindings
+                     (let ((ref (plist-get bindings (intern (format ":%s" key)))))
+                       (when (twidget-ref-p ref)
+                         (throw 'found ref))))))
+               twidget-instances)
+      ;; Not found, create a new one if initial value provided
+      (when initial-value
+        (twidget-ref initial-value)))))
 
 ;;; Built-in widgets
 
