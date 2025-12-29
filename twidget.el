@@ -406,5 +406,91 @@ SYM is a symbol whose value is a string representation of a number."
     (set (make-local-variable sym)
          (number-to-string (- (string-to-number str) num)))))
 
+;;; Built-in widgets
+
+(define-tp tp-button (plist)
+  (let ((action (plist-get plist :action))
+        (bgcolor (plist-get plist :bgcolor)))
+    `( face ( :box (:color "gray" :line-width (2 . 2)
+                           :style released-button)
+              :background ,bgcolor)
+       keymap ,(let ((keymap (make-sparse-keymap)))
+                 (define-key keymap (kbd "<RET>") action)
+                 (define-key keymap [mouse-1] action)
+                 keymap))))
+
+(define-tp tp-space (pixel)
+  `(display (space :width (,pixel))))
+
+(define-tp tp-headline (props)
+  (let (height boldp)
+    (cond ((floatp props)
+           (setq height props boldp t))
+          ((plistp props)
+           (setq height (plist-get props :height)
+                 boldp (plist-get props :bold))))
+    `(face (:height ,height
+                    ,@(when boldp '(:weight bold))))))
+
+(define-twidget button
+  :slot t
+  :props '(action (bgcolor . "orange"))
+  :render (lambda (props slot)
+            (let ((action (plist-get props :action))
+                  (bgcolor (plist-get props :bgcolor)))
+              (tp-add (format "%s%s%s"
+                              (tp-set " " 'tp-space 6)
+                              slot (tp-set " " 'tp-space 6))
+                      'tp-button `(:bgcolor ,bgcolor :action ,action)))))
+
+(define-twidget p
+  :slot t :render (lambda (_props slot)
+                    (concat slot "\n")))
+
+(define-twidget div
+  :slot t :render (lambda (_props slot)
+                    (concat slot "\n")))
+
+(define-twidget span
+  :slot t :render (lambda (_props slot) slot))
+
+(define-twidget headline
+  :slot t
+  :props '(height)
+  :render (lambda (props slot)
+            (concat (tp-set slot 'tp-headline
+                            (plist-get props :height))
+                    "\n")))
+
+(define-twidget h1
+  :extends 'headline
+  :props '((height . 2.0))
+  :render (lambda (props slot parent-render)
+            (funcall parent-render props slot)))
+
+(define-twidget h2
+  :extends 'headline
+  :props '((height . 1.7))
+  :render (lambda (props slot parent-render)
+            (funcall parent-render props slot)))
+
+(define-twidget h3
+  :extends 'headline
+  :props '((height . 1.5))
+  :render (lambda (props slot parent-render)
+            (funcall parent-render props slot)))
+
+(define-twidget h4
+  :extends 'headline
+  :props '((height . 1.3))
+  :render (lambda (props slot parent-render)
+            (funcall parent-render props slot)))
+
+(define-twidget h5
+  :extends 'headline
+  :props '((height . 1.1))
+  :render (lambda (props slot parent-render)
+            (funcall parent-render props slot)))
+
 (provide 'twidget)
 ;;; twidget.el ends here
