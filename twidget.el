@@ -553,16 +553,20 @@ SYM is a symbol whose value is a string representation of a number."
 VAR-NAME is a string. Returns the symbol used for tp.el reactive binding."
   (intern (format "twidget--reactive-%s" var-name)))
 
+(defun twidget--render-template (template var-name value)
+  "Render TEMPLATE by substituting {VAR-NAME} with VALUE."
+  (replace-regexp-in-string
+   (regexp-quote (format "{%s}" var-name))
+   (format "%s" value)
+   template t t))
+
 (defun twidget--register-binding (var-name template value)
   "Register a reactive binding for VAR-NAME.
 TEMPLATE is the template string with {placeholder}.
 VALUE is the initial value.
 Returns the reactive symbol."
   (let ((sym (twidget--make-reactive-symbol var-name))
-        (rendered (replace-regexp-in-string
-                   (regexp-quote (format "{%s}" var-name))
-                   (format "%s" value)
-                   template t t)))
+        (rendered (twidget--render-template template var-name value)))
     ;; Store binding info
     (puthash var-name
              (list :symbol sym :template template :value value)
@@ -587,11 +591,7 @@ This triggers reactive updates in the buffer via tp.el."
     (when binding
       (let* ((sym (plist-get binding :symbol))
              (template (plist-get binding :template))
-             ;; Re-render the template with new value
-             (rendered (replace-regexp-in-string
-                        (regexp-quote (format "{%s}" key))
-                        (format "%s" value)
-                        template t t)))
+             (rendered (twidget--render-template template key value)))
         ;; Update stored value
         (puthash key
                  (list :symbol sym :template template :value value)
