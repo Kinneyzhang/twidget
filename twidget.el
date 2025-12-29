@@ -692,6 +692,16 @@ substitution."
   (interactive)
   (setq twidget-alist nil))
 
+(defun twidget-clear-buffer-state ()
+  "Clear all buffer-local widget state.
+This should be called before re-inserting widgets to ensure fresh state.
+Clears: widget instances, ref registry, reactive symbols, and text counter."
+  (interactive)
+  (clrhash twidget-instances)
+  (clrhash twidget-ref-registry)
+  (clrhash twidget-reactive-symbols)
+  (setq twidget-reactive-text-counter 0))
+
 (defun twidget-extract-variables (form)
   "Extract variable names referenced in :for directives from FORM.
 Returns a list of unique variable name symbols."
@@ -728,6 +738,10 @@ lexical variables referenced in :for directives.
 Note: For variable capture to work, FORM must be a quoted literal.
 Dynamic forms at runtime cannot capture lexical variables.
 
+When inserting at the beginning of the buffer (point-min), this macro
+automatically clears the buffer-local widget state to ensure fresh
+reactive values.
+
 Example:
   (let ((editors \\='(\"emacs\" \"vim\" \"vscode\")))
     (twidget-insert
@@ -737,12 +751,19 @@ Example:
   (if (and (listp form) (eq (car form) 'quote))
       (let* ((widget-form (cadr form))
              (vars (twidget-extract-variables widget-form)))
-        `(let ((bindings (list ,@(mapcar (lambda (var)
-                                           `(cons ,(symbol-name var) ,var))
-                                         vars))))
-           (insert (twidget-parse ',widget-form bindings))))
+        `(progn
+           ;; Clear state when inserting at buffer start (common case for tp-pop-to-buffer)
+           (when (= (point) (point-min))
+             (twidget-clear-buffer-state))
+           (let ((bindings (list ,@(mapcar (lambda (var)
+                                             `(cons ,(symbol-name var) ,var))
+                                           vars))))
+             (insert (twidget-parse ',widget-form bindings)))))
     ;; Runtime extraction (fallback) - cannot capture lexical variables
-    `(insert (twidget-parse ,form nil))))
+    `(progn
+       (when (= (point) (point-min))
+         (twidget-clear-buffer-state))
+       (insert (twidget-parse ,form nil)))))
 
 ;;; Reactive Data System
 ;; ============================================================================
