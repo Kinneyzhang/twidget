@@ -738,8 +738,7 @@ lexical variables referenced in :for directives.
 Note: For variable capture to work, FORM must be a quoted literal.
 Dynamic forms at runtime cannot capture lexical variables.
 
-When inserting at the beginning of the buffer (point-min), this macro
-automatically clears the buffer-local widget state to ensure fresh
+This macro automatically clears the buffer-local widget state to ensure fresh
 reactive values.
 
 Example:
@@ -752,17 +751,14 @@ Example:
       (let* ((widget-form (cadr form))
              (vars (twidget-extract-variables widget-form)))
         `(progn
-           ;; Clear state when inserting at buffer start (common case for tp-pop-to-buffer)
-           (when (= (point) (point-min))
-             (twidget-clear-buffer-state))
+           (twidget-clear-buffer-state)
            (let ((bindings (list ,@(mapcar (lambda (var)
                                              `(cons ,(symbol-name var) ,var))
                                            vars))))
              (insert (twidget-parse ',widget-form bindings)))))
     ;; Runtime extraction (fallback) - cannot capture lexical variables
     `(progn
-       (when (= (point) (point-min))
-         (twidget-clear-buffer-state))
+       (twidget-clear-buffer-state)
        (insert (twidget-parse ,form nil)))))
 
 ;;; Reactive Data System
