@@ -48,6 +48,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'tp)
 
 ;;; Variables
@@ -56,6 +57,10 @@
 (defvar twidget-alist nil
   "Alist of widget definitions: (WIDGET-NAME . DEFINITION).
 Each DEFINITION is a plist with :props, :slot, and :render keys.")
+
+(defvar-local twidget-reactive-data (make-hash-table :test 'equal)
+  "Buffer-local hash table for storing reactive data bindings.
+Keys are string variable names, values are the actual data values.")
 
 ;;; Widget Definition
 ;; ============================================================================
@@ -254,7 +259,7 @@ Returns the slot name as a symbol (e.g., \\='header)."
 ;;; Widget Parsing
 ;; ============================================================================
 
-(defun twidget-parse (widget-form)
+(cl-defun twidget-parse (widget-form &optional bindings)
   "Parse and render a widget invocation.
 
 WIDGET-FORM is a list starting with the widget name, followed by
@@ -268,10 +273,17 @@ For named slots, use (slot-<name> content...) sexp format:
                (slot-header \"Header\")
                (slot-content \"Content\"))
 
+Special directives:
+  :bind - Bind a reactive data variable, e.g., :bind \"varname\"
+  :for  - Loop over a collection, e.g., :for \"item in items\"
+
 Keyword arguments must come before slot values. Slot values are all
 remaining elements after the keyword-value pairs. Each slot value can be:
   - A string: used directly
   - A list starting with a widget name: recursively parsed as a widget
+
+BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
+substitution in slot content.
 
 Example:
   (twidget-parse
@@ -301,13 +313,70 @@ Returns the rendered string with text properties applied."
       (let ((args rest)
             (collected-props nil)
             (collected-named-slots nil)
-            (slot-parts nil))
+            (slot-parts nil)
+            (bind-var nil)
+            (for-expr nil)
+            (local-bindings (copy-alist bindings)))
         ;; Parse keyword arguments first
         (while (and args (keywordp (car args)))
           (let ((key (car args))
                 (val (cadr args)))
-            (push (cons key val) collected-props)
+            (cond
+             ;; Handle :bind directive
+             ((eq key :bind)
+              (setq bind-var val))
+             ;; Handle :for directive
+             ((eq key :for)
+              (setq for-expr val))
+             ;; Regular prop
+             (t (push (cons key val) collected-props)))
             (setq args (cddr args))))
+        ;; Handle :bind directive - store the binding value in reactive data
+        (when bind-var
+          (let ((bind-key (if (stringp bind-var) bind-var (symbol-name bind-var)))
+                (bind-value (cdr (assoc bind-var local-bindings))))
+            ;; If we have a binding from loop context, use it
+            ;; Otherwise try to get from lexical scope via eval
+            (unless bind-value
+              (condition-case nil
+                  (setq bind-value (eval (intern bind-key)))
+                (error nil)))
+            (when bind-value
+              (twidget-set bind-key bind-value)
+              ;; Add to local bindings for placeholder substitution
+              (push (cons bind-key bind-value) local-bindings))))
+        ;; Handle :for directive - iterate and return concatenated result
+        (when for-expr
+          (let ((parsed (twidget-parse-for-expression for-expr)))
+            (if parsed
+                (let* ((loop-var (car parsed))
+                       (collection-name (cdr parsed))
+                       ;; First check bindings, then try symbol-value for dynamic scope
+                       (collection (or (cdr (assoc collection-name local-bindings))
+                                       (condition-case nil
+                                           (symbol-value (intern collection-name))
+                                         (error nil))))
+                       (results nil))
+                  (if (listp collection)
+                      (progn
+                        (dolist (item collection)
+                          ;; Create new bindings with loop variable
+                          (let ((loop-bindings (cons (cons loop-var item)
+                                                     local-bindings)))
+                            ;; Reconstruct widget form without :for
+                            (let ((new-form (cons widget-name
+                                                  (append
+                                                   ;; Add remaining props (excluding :for)
+                                                   (apply #'append
+                                                          (mapcar (lambda (p)
+                                                                    (list (car p) (cdr p)))
+                                                                  collected-props))
+                                                   ;; Add remaining args (slot values)
+                                                   args))))
+                              (push (twidget-parse new-form loop-bindings) results))))
+                        (cl-return-from twidget-parse (apply #'concat (nreverse results))))
+                    (warn "twidget-parse: :for collection `%s' is not a list" collection-name)))
+              (warn "twidget-parse: Invalid :for expression: %s" for-expr))))
         ;; Process remaining arguments (slot values or named slot sexps)
         (when args
           (if slot-def
@@ -320,13 +389,13 @@ Returns the rendered string with text properties applied."
                                (slot-keyword (intern (format ":%s" slot-name)))
                                (slot-content (cdr arg)))
                           (push (cons slot-keyword
-                                      (twidget-process-slot-args slot-content))
+                                      (twidget-process-slot-args slot-content local-bindings))
                                 collected-named-slots))
                       ;; Not a slot sexp - could be default slot content
                       (when (memq 'default slot-def)
-                        (push (twidget-process-slot-value arg) slot-parts))))
+                        (push (twidget-process-slot-value arg local-bindings) slot-parts))))
                 ;; Single slot mode
-                (setq slot-value (twidget-process-slot-args args)))
+                (setq slot-value (twidget-process-slot-args args local-bindings)))
             ;; Slot not supported - warn about ignored arguments
             (warn "twidget-parse: Widget `%s' does not support slot content. \
 Ignoring arguments: %S" widget-name args)))
@@ -364,21 +433,26 @@ Ignoring arguments: %S" widget-name args)))
         ;; Normal render call
         (funcall render-fn parsed-props slot-value)))))
 
-(defun twidget-process-slot-value (val)
-  "Process a single slot VAL, recursively parsing widget forms."
+(defun twidget-process-slot-value (val &optional bindings)
+  "Process a single slot VAL, recursively parsing widget forms.
+BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
+substitution."
   (cond
-   ((stringp val) val)
+   ((stringp val)
+    (twidget-substitute-placeholders val bindings))
    ((and (listp val)
          (symbolp (car val))
          (assoc (car val) twidget-alist))
-    (twidget-parse val))
+    (twidget-parse val bindings))
    (t (format "%s" val))))
 
-(defun twidget-process-slot-args (args)
-  "Process multiple slot ARGS into a single concatenated string."
+(defun twidget-process-slot-args (args &optional bindings)
+  "Process multiple slot ARGS into a single concatenated string.
+BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
+substitution."
   (let ((slot-parts nil))
     (dolist (slot-item args)
-      (push (twidget-process-slot-value slot-item) slot-parts))
+      (push (twidget-process-slot-value slot-item bindings) slot-parts))
     (apply #'concat (nreverse slot-parts))))
 
 (defun twidget-reset ()
@@ -386,8 +460,92 @@ Ignoring arguments: %S" widget-name args)))
   (interactive)
   (setq twidget-alist nil))
 
-(defun twidget-insert (widget-form)
-  (insert (twidget-parse widget-form)))
+(defun twidget-insert (widget-form &optional bindings)
+  "Insert the rendered widget WIDGET-FORM at point.
+BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
+substitution."
+  (insert (twidget-parse widget-form bindings)))
+
+(defun twidget-extract-variables (form)
+  "Extract variable names referenced in :bind and :for directives from FORM.
+Returns a list of unique variable name symbols."
+  (let ((vars nil))
+    (cond
+     ((not (listp form)) nil)
+     ((and (listp form) (symbolp (car form)))
+      ;; This is a widget form or subform
+      (let ((rest (cdr form)))
+        ;; Look for :bind and :for in keyword arguments
+        (while (and rest (keywordp (car rest)))
+          (let ((key (car rest))
+                (val (cadr rest)))
+            (cond
+             ((eq key :bind)
+              (when (stringp val)
+                (push (intern val) vars)))
+             ((eq key :for)
+              (when (stringp val)
+                (let ((parsed (twidget-parse-for-expression val)))
+                  (when parsed
+                    (push (intern (cdr parsed)) vars))))))
+            (setq rest (cddr rest))))
+        ;; Recursively check remaining elements
+        (dolist (elem rest)
+          (setq vars (append (twidget-extract-variables elem) vars)))))
+     (t
+      ;; It's a list but not a widget form, check each element
+      (dolist (elem form)
+        (setq vars (append (twidget-extract-variables elem) vars)))))
+    (cl-remove-duplicates vars)))
+
+(defmacro twidget-insert* (form)
+  "Insert the rendered widget FORM, auto-capturing referenced variables.
+FORM should be a quoted widget form. This macro automatically captures
+lexical variables referenced in :bind and :for directives.
+
+Example:
+  (let ((editor \"emacs\")
+        (editors \\='(\"emacs\" \"vim\" \"vscode\")))
+    (twidget-insert*
+     \\='(div (p :bind \"editor\" \"Using {editor}\")
+           (p :for \"e in editors\" \"Editor: {e}\"))))"
+  (declare (indent 0))
+  ;; Extract variables at compile time if form is a quoted list
+  (if (and (listp form) (eq (car form) 'quote))
+      (let* ((widget-form (cadr form))
+             (vars (twidget-extract-variables widget-form)))
+        `(let ((bindings (list ,@(mapcar (lambda (var)
+                                           `(cons ,(symbol-name var) ,var))
+                                         vars))))
+           (insert (twidget-parse ',widget-form bindings))))
+    ;; Runtime extraction (fallback)
+    `(let* ((widget-form ,form)
+            (vars (twidget-extract-variables widget-form))
+            (bindings nil))
+       (insert (twidget-parse widget-form bindings)))))
+
+(defmacro twidget-let (bindings &rest body)
+  "Execute BODY with BINDINGS available for widget placeholder substitution.
+
+BINDINGS is a list of (SYMBOL VALUE) pairs, similar to `let'.
+Within BODY, use `twidget-insert-with-bindings' or pass the bindings
+to `twidget-parse' to access these values in widget templates.
+
+Example:
+  (twidget-let ((editor \"emacs\")
+                (editors \\='(\"emacs\" \"vim\" \"vscode\")))
+    (twidget-insert-with-bindings
+     \\='(div (p :bind \"editor\" \"Using {editor}\")
+           (p :for \"e in editors\" \"Editor: {e}\"))))"
+  (declare (indent 1))
+  (let ((bindings-var (make-symbol "bindings")))
+    `(let ((,bindings-var (list ,@(mapcar (lambda (b)
+                                            `(cons ,(symbol-name (car b)) ,(cadr b)))
+                                          bindings)))
+           ,@bindings)
+       (cl-flet ((twidget-insert-with-bindings (form)
+                   (insert (twidget-parse form ,bindings-var))))
+         ,@body))))
 
 ;;; Utilities
 ;; ============================================================================
@@ -405,6 +563,52 @@ SYM is a symbol whose value is a string representation of a number."
   (let ((str (symbol-value sym)))
     (set (make-local-variable sym)
          (number-to-string (- (string-to-number str) num)))))
+
+;;; Reactive Data System
+;; ============================================================================
+
+(defun twidget-get (var-name)
+  "Get the value of reactive data variable VAR-NAME.
+VAR-NAME should be a symbol representing the variable name."
+  (let ((key (if (symbolp var-name)
+                 (symbol-name var-name)
+               var-name)))
+    (gethash key twidget-reactive-data)))
+
+(defun twidget-set (var-name value)
+  "Set the value of reactive data variable VAR-NAME to VALUE.
+VAR-NAME should be a symbol representing the variable name."
+  (let ((key (if (symbolp var-name)
+                 (symbol-name var-name)
+               var-name)))
+    (puthash key value twidget-reactive-data)))
+
+(defun twidget-substitute-placeholders (str bindings)
+  "Substitute {variable} placeholders in STR with values from BINDINGS.
+BINDINGS is an alist of (VAR-NAME . VALUE) pairs.
+If a placeholder is not found in BINDINGS, it tries `twidget-reactive-data'."
+  (if (stringp str)
+      (replace-regexp-in-string
+       "{\\([^}]+\\)}"
+       (lambda (match)
+         (let* ((var-name (match-string 1 match))
+                (binding (assoc var-name bindings)))
+           (if binding
+               (format "%s" (cdr binding))
+             ;; Try reactive data store
+             (let ((reactive-val (gethash var-name twidget-reactive-data)))
+               (if reactive-val
+                   (format "%s" reactive-val)
+                 match)))))
+       str t t)
+    str))
+
+(defun twidget-parse-for-expression (for-expr)
+  "Parse a :for expression like \"item in items\".
+Returns a cons cell (LOOP-VAR . COLLECTION-NAME) or nil if invalid."
+  (when (string-match "^\\s-*\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-+in\\s-+\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*$" for-expr)
+    (cons (match-string 1 for-expr)
+          (match-string 2 for-expr))))
 
 ;;; Built-in widgets
 
