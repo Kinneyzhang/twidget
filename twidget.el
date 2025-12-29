@@ -460,12 +460,6 @@ substitution."
   (interactive)
   (setq twidget-alist nil))
 
-(defun twidget-insert (widget-form &optional bindings)
-  "Insert the rendered widget WIDGET-FORM at point.
-BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
-substitution."
-  (insert (twidget-parse widget-form bindings)))
-
 (defun twidget-extract-variables (form)
   "Extract variable names referenced in :bind and :for directives from FORM.
 Returns a list of unique variable name symbols."
@@ -498,15 +492,15 @@ Returns a list of unique variable name symbols."
         (setq vars (append (twidget-extract-variables elem) vars)))))
     (cl-remove-duplicates vars)))
 
-(defmacro twidget-insert* (form)
-  "Insert the rendered widget FORM, auto-capturing referenced variables.
+(defmacro twidget-insert (form)
+  "Insert the rendered widget FORM at point, auto-capturing referenced variables.
 FORM should be a quoted widget form. This macro automatically captures
 lexical variables referenced in :bind and :for directives.
 
 Example:
   (let ((editor \"emacs\")
         (editors \\='(\"emacs\" \"vim\" \"vscode\")))
-    (twidget-insert*
+    (twidget-insert
      \\='(div (p :bind \"editor\" \"Using {editor}\")
            (p :for \"e in editors\" \"Editor: {e}\"))))"
   (declare (indent 0))
@@ -523,29 +517,6 @@ Example:
             (vars (twidget-extract-variables widget-form))
             (bindings nil))
        (insert (twidget-parse widget-form bindings)))))
-
-(defmacro twidget-let (bindings &rest body)
-  "Execute BODY with BINDINGS available for widget placeholder substitution.
-
-BINDINGS is a list of (SYMBOL VALUE) pairs, similar to `let'.
-Within BODY, use `twidget-insert-with-bindings' or pass the bindings
-to `twidget-parse' to access these values in widget templates.
-
-Example:
-  (twidget-let ((editor \"emacs\")
-                (editors \\='(\"emacs\" \"vim\" \"vscode\")))
-    (twidget-insert-with-bindings
-     \\='(div (p :bind \"editor\" \"Using {editor}\")
-           (p :for \"e in editors\" \"Editor: {e}\"))))"
-  (declare (indent 1))
-  (let ((bindings-var (make-symbol "bindings")))
-    `(let ((,bindings-var (list ,@(mapcar (lambda (b)
-                                            `(cons ,(symbol-name (car b)) ,(cadr b)))
-                                          bindings)))
-           ,@bindings)
-       (cl-flet ((twidget-insert-with-bindings (form)
-                   (insert (twidget-parse form ,bindings-var))))
-         ,@body))))
 
 ;;; Utilities
 ;; ============================================================================
