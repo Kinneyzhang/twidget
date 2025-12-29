@@ -186,17 +186,18 @@ There are two ways to define a widget:
    ARGS should include:
      :props - Same as above
      :slot  - Same as above
-     :setup - A lambda that receives props and returns a plist of reactive bindings.
+     :setup - A lambda that receives props and slot, returns a plist of reactive bindings.
               Use `twidget-ref' to create reactive values.
-              (lambda (props) (list :count (twidget-ref \"0\")))
+              (lambda (props slot) (list :count (twidget-ref slot)))
      :template - A quoted template sexp that defines the widget structure.
                  Use {varname} syntax in strings to bind to reactive data.
                  Template elements can be nested widget forms.
 
    Example:
      (define-twidget my-counter
-       :setup (lambda (_props)
-                (list :count (twidget-ref \"0\")))
+       :slot t
+       :setup (lambda (_props slot)
+                (list :count (twidget-ref slot)))
        :template \\='(p (span \"{count}\")
                       \" \"
                       (button :action (lambda ()
@@ -527,12 +528,12 @@ Ignoring arguments: %S" widget-name args)))
 
 (defun twidget--render-composite (setup-fn template props slot)
   "Render a composite widget using SETUP-FN and TEMPLATE.
-SETUP-FN is a function that receives props and returns reactive bindings.
+SETUP-FN is a function that receives props and slot, returns reactive bindings.
 TEMPLATE is a template sexp to expand and render.
 PROPS is the parsed props plist.
 SLOT is the slot value (if any)."
-  ;; Call setup function to get reactive bindings
-  (let* ((reactive-bindings (funcall setup-fn props))
+  ;; Call setup function to get reactive bindings (pass both props and slot)
+  (let* ((reactive-bindings (funcall setup-fn props slot))
          (instance-id (twidget--generate-instance-id))
          (bindings nil))
     ;; Process reactive bindings from setup

@@ -210,9 +210,11 @@ For complex widgets that compose other widgets with reactive data, use `:setup` 
 ```elisp
 ;; Define a counter widget with reactive state
 (define-twidget my-counter
-  :setup (lambda (_props)
+  :slot t
+  :setup (lambda (_props slot)
            ;; Return a plist with reactive bindings
-           (list :count (twidget-ref "0")))
+           ;; slot contains the slot content passed to the widget
+           (list :count (twidget-ref slot)))
   :template '(p (span "{count}")
                 " "
                 (button :action (lambda ()
@@ -225,14 +227,14 @@ For complex widgets that compose other widgets with reactive data, use `:setup` 
                                   (twidget-dec 'count 1))
                         "-")))
 
-;; Use the counter
-(twidget-parse '(my-counter))
+;; Use the counter with initial value from slot
+(twidget-parse '(my-counter "0"))
 ```
 
 **Key Concepts:**
 
 - **`twidget-ref`** - Creates a reactive reference. When its value changes, the UI updates automatically.
-- **`:setup`** - A function that receives props and returns a plist of reactive bindings.
+- **`:setup`** - A function that receives props and slot, returns a plist of reactive bindings.
 - **`:template`** - A quoted sexp defining the widget structure. Use `{varname}` for reactive placeholders.
 
 ### Reactive Data API

@@ -210,9 +210,11 @@
 ```elisp
 ;; 定义一个带响应式状态的计数器组件
 (define-twidget my-counter
-  :setup (lambda (_props)
+  :slot t
+  :setup (lambda (_props slot)
            ;; 返回包含响应式绑定的 plist
-           (list :count (twidget-ref "0")))
+           ;; slot 包含传递给组件的插槽内容
+           (list :count (twidget-ref slot)))
   :template '(p (span "{count}")
                 " "
                 (button :action (lambda ()
@@ -225,14 +227,14 @@
                                   (twidget-dec 'count 1))
                         "-")))
 
-;; 使用计数器
-(twidget-parse '(my-counter))
+;; 使用计数器，通过插槽传递初始值
+(twidget-parse '(my-counter "0"))
 ```
 
 **关键概念：**
 
 - **`twidget-ref`** - 创建响应式引用。当值改变时，UI 自动更新。
-- **`:setup`** - 接收 props 并返回响应式绑定 plist 的函数。
+- **`:setup`** - 接收 props 和 slot，返回响应式绑定 plist 的函数。
 - **`:template`** - 定义组件结构的 quoted sexp。使用 `{varname}` 语法绑定响应式数据。
 
 ### 响应式数据 API
