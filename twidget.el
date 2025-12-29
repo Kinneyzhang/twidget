@@ -1,0 +1,334 @@
+(require 'tp)
+
+(defvar twidget-alist nil
+  "Alist of widget definitions: (WIDGET-NAME . DEFINITION).
+Each DEFINITION is a plist with :props, :slot, and :render keys.")
+
+(defmacro define-twidget (name &rest args)
+  "Define a text widget (widget) named NAME.
+
+ARGS should include:
+  :props - A quoted list of property definitions. Each can be:
+           - A symbol: required property accessed via keyword
+           - A cons cell (SYMBOL . DEFAULT): property with default value
+  :slot  - Boolean value or list of slot names.
+           nil (default) means widget does not support slot.
+           t means widget supports a single default slot.
+           A list of symbols defines named slots, e.g., \\='(header content footer)
+  :slots - Alias for :slot with named slots (for clarity)
+  :extends - Symbol of a parent widget to inherit from.
+             The child widget inherits :props and :slot from the parent.
+             Child :props override parent defaults; child :render can call parent-render.
+  :render - A lambda that returns the rendered string.
+            For single slot: (lambda (props slot) ...)
+            For named slots: (lambda (props slots) ...) where slots is a plist
+            When :extends is used: (lambda (props slot parent-render) ...)
+
+The render function receives:
+  - PROPS: a plist of resolved property values (with :keyword keys)
+  - SLOT/SLOTS: For single slot (t), a string containing all slot values.
+                For named slots, a plist with slot names as keywords.
+  - PARENT-RENDER: When :extends is used, a function to call parent's render.
+
+Named Slots Example:
+  (define-twidget card
+    :slots \\='(header content footer)
+    :render (lambda (props slots)
+              (concat (plist-get slots :header) \"\\n\"
+                      (plist-get slots :content) \"\\n\"
+                      (plist-get slots :footer))))
+
+  ;; Usage - named slots use (slot<name> content...) sexp format:
+  (twidget-parse
+   \\='(card (slot-header \"Title\")
+          (slot-content \"Body text\")
+          (slot-footer \"Footer\")))
+
+Component Inheritance Example:
+  (define-twidget base-button
+    :props \\='((type . \"default\"))
+    :slot t
+    :render (lambda (props slot)
+              (tp-set slot \\='face \\='button)))
+
+  (define-twidget primary-button
+    :extends \\='base-button
+    :props \\='((type . \"primary\"))
+    :render (lambda (props slot parent-render)
+              (let ((result (funcall parent-render props slot)))
+                (tp-add result \\='face \\='(:foreground \"blue\")))))"
+  (declare (indent defun))
+  (let ((props nil)
+        (slot :twidget--unspecified)  ; Sentinel value to detect if :slot was provided
+        (extends nil)
+        (render nil)
+        (rest args))
+    ;; Parse keyword arguments
+    (while rest
+      (pcase (car rest)
+        (:props (setq props (cadr rest) rest (cddr rest)))
+        (:slot (setq slot (cadr rest) rest (cddr rest)))
+        (:slots (setq slot (cadr rest) rest (cddr rest)))  ; Alias for named slots
+        (:extends (setq extends (cadr rest) rest (cddr rest)))
+        (:render (setq render (cadr rest) rest (cddr rest)))
+        (_ (error "Unknown keyword %S in define-twidget" (car rest)))))
+    ;; Prepare slot value - the sentinel :twidget--unspecified needs to be passed as-is
+    ;; Other values (t, nil, or list) should evaluate properly
+    (let ((slot-form (if (eq slot :twidget--unspecified)
+                         :twidget--unspecified
+                       ;; If slot is a quoted list (from ':slots '(x y z)),
+                       ;; the value is actually (quote (x y z)), so we just pass it
+                       slot)))
+      `(twidget-internal ',name ,props ,slot-form ,extends ,render))))
+
+(defun twidget-internal (name props slot extends render)
+  "Internal function to define a widget NAME with PROPS, SLOT, EXTENDS, and RENDER.
+PROPS is a list of property definitions.
+SLOT is a boolean, list of slot names, or :twidget--unspecified (not provided).
+EXTENDS is a symbol of a parent widget to inherit from.
+RENDER is the render function."
+  ;; Handle inheritance if :extends is specified
+  (let* ((slot-was-specified (not (eq slot :twidget--unspecified)))
+         (final-slot (if slot-was-specified slot nil))
+         (final-props props)
+         (parent-render nil))
+    (when extends
+      (let ((parent-def (cdr (assoc extends twidget-alist))))
+        (unless parent-def
+          (error "Parent widget not found: %S" extends))
+        ;; Inherit slot from parent only if child didn't specify :slot
+        (unless slot-was-specified
+          (setq final-slot (plist-get parent-def :slot)))
+        ;; Merge props: child props override parent defaults
+        (let ((parent-props (plist-get parent-def :props)))
+          (setq final-props (twidget-props parent-props final-props)))
+        ;; Store parent render for child to call - resolve the full chain
+        (let ((parent-extends (plist-get parent-def :extends)))
+          (if parent-extends
+              ;; Parent also extends something - wrap parent render to pass its parent
+              (let ((grandparent-render (plist-get parent-def :parent-render)))
+                (setq parent-render
+                      (lambda (props slot)
+                        (funcall (plist-get parent-def :render)
+                                 props slot grandparent-render))))
+            ;; Parent doesn't extend - use parent render directly
+            (setq parent-render (plist-get parent-def :render))))))
+    (let ((definition (list :props final-props
+                            :slot final-slot
+                            :extends extends
+                            :parent-render parent-render
+                            :render render))
+          (existing (assoc name twidget-alist)))
+      (if existing
+          (setcdr existing definition)
+        (push (cons name definition) twidget-alist)))
+    (assoc name twidget-alist)))
+
+(defun twidget-props (parent-props child-props)
+  "Merge PARENT-PROPS with CHILD-PROPS.
+Child props override parent props with the same name.
+Props without defaults in child inherit defaults from parent."
+  (let ((result nil)
+        (parent-map (make-hash-table :test 'equal))
+        (child-map (make-hash-table :test 'equal)))
+    ;; Build maps of prop-name -> prop-def
+    (dolist (prop parent-props)
+      (puthash (twidget-prop-name prop) prop parent-map))
+    (dolist (prop child-props)
+      (puthash (twidget-prop-name prop) prop child-map))
+    ;; Merge: child overrides parent
+    (maphash (lambda (name prop)
+               (let ((child-prop (gethash name child-map)))
+                 (if child-prop
+                     (push child-prop result)
+                   (push prop result))))
+             parent-map)
+    ;; Add any child-only props
+    (maphash (lambda (name prop)
+               (unless (gethash name parent-map)
+                 (push prop result)))
+             child-map)
+    (nreverse result)))
+
+(defun twidget-prop-name (prop-def)
+  "Extract the property name from PROP-DEF.
+PROP-DEF can be a symbol or a cons cell (SYMBOL . DEFAULT)."
+  (if (consp prop-def)
+      (car prop-def)
+    prop-def))
+
+(defun twidget-prop-default (prop-def)
+  "Extract the default value from PROP-DEF.
+Returns nil if no default is specified."
+  (if (consp prop-def)
+      (cdr prop-def)
+    nil))
+
+(defun twidget-prop-has-default-p (prop-def)
+  "Return non-nil if PROP-DEF has a default value."
+  (consp prop-def))
+
+(defun twidget-slot-is-named-p (slot-def)
+  "Return non-nil if SLOT-DEF defines named slots (a list of symbols)."
+  (and (listp slot-def)
+       (not (null slot-def))
+       (symbolp (car slot-def))))
+
+(defun twidget-is-slot-sexp-p (form slot-def)
+  "Return non-nil if FORM is a named slot sexp like (slot-header content...).
+SLOT-DEF is the list of defined slot names."
+  (and (listp form)
+       (symbolp (car form))
+       (let ((name (symbol-name (car form))))
+         (and (string-prefix-p "slot-" name)
+              (memq (intern (substring name 5)) slot-def)))))
+
+(defun twidget-extract-slot-name (slot-sexp)
+  "Extract the slot name from SLOT-SEXP like (slot-header content...).
+Returns the slot name as a symbol (e.g., \\='header)."
+  (let ((name (symbol-name (car slot-sexp))))
+    (intern (substring name 5))))
+
+(defun twidget-parse (widget-form)
+  "Parse and render a widget invocation.
+
+WIDGET-FORM is a list starting with the widget name, followed by
+keyword-value pairs for props, and then slot values (if the widget
+supports slots).
+
+The format is: (WIDGET-NAME :prop1 val1 :prop2 val2 ... SLOT-VALUES...)
+
+For named slots, use (slot-<name> content...) sexp format:
+  (WIDGET-NAME :prop1 val1
+               (slot-header \"Header\")
+               (slot-content \"Content\"))
+
+Keyword arguments must come before slot values. Slot values are all
+remaining elements after the keyword-value pairs. Each slot value can be:
+  - A string: used directly
+  - A list starting with a widget name: recursively parsed as a widget
+
+Example:
+  (twidget-parse
+   \\='(p \"happy hacking \"
+       (text \"emacs\")
+       (button :action (lambda () (message \"clicked!\"))
+               \"click\")))
+
+Returns the rendered string with text properties applied."
+  (unless (and (listp widget-form) (symbolp (car widget-form)))
+    (error "Invalid widget form: must be a list starting with widget name"))
+  (let* ((widget-name (car widget-form))
+         (rest (cdr widget-form))
+         (definition (cdr (assoc widget-name twidget-alist))))
+    (unless definition
+      (error "Undefined widget: %S" widget-name))
+    (let* ((prop-defs (plist-get definition :props))
+           (slot-def (plist-get definition :slot))
+           (extends (plist-get definition :extends))
+           (parent-render-fn (plist-get definition :parent-render))
+           (render-fn (plist-get definition :render))
+           (parsed-props nil)
+           (slot-value nil)
+           (named-slots-p (twidget-slot-is-named-p slot-def)))
+      ;; Parse the widget invocation arguments
+      ;; Extract keyword arguments and collect slot values
+      (let ((args rest)
+            (collected-props nil)
+            (collected-named-slots nil)
+            (slot-parts nil))
+        ;; Parse keyword arguments first
+        (while (and args (keywordp (car args)))
+          (let ((key (car args))
+                (val (cadr args)))
+            (push (cons key val) collected-props)
+            (setq args (cddr args))))
+        ;; Process remaining arguments (slot values or named slot sexps)
+        (when args
+          (if slot-def
+              (if named-slots-p
+                  ;; Named slots mode - look for (slot-<name> ...) sexps
+                  (dolist (arg args)
+                    (if (twidget-is-slot-sexp-p arg slot-def)
+                        ;; This is a named slot sexp
+                        (let* ((slot-name (twidget-extract-slot-name arg))
+                               (slot-keyword (intern (format ":%s" slot-name)))
+                               (slot-content (cdr arg)))
+                          (push (cons slot-keyword
+                                      (twidget-process-slot-args slot-content))
+                                collected-named-slots))
+                      ;; Not a slot sexp - could be default slot content
+                      (when (memq 'default slot-def)
+                        (push (twidget-process-slot-value arg) slot-parts))))
+                ;; Single slot mode
+                (setq slot-value (twidget-process-slot-args args)))
+            ;; Slot not supported - warn about ignored arguments
+            (warn "twidget-parse: Widget `%s' does not support slot content. \
+Ignoring arguments: %S" widget-name args)))
+        ;; Combine default slot parts if any
+        (when (and named-slots-p slot-parts)
+          (push (cons :default (apply #'concat (nreverse slot-parts)))
+                collected-named-slots))
+        ;; Build named slots plist if using named slots
+        (when named-slots-p
+          (let ((slots-plist nil))
+            (dolist (slot-name slot-def)
+              (let* ((slot-keyword (intern (format ":%s" slot-name)))
+                     (provided (assoc slot-keyword collected-named-slots)))
+                (when provided
+                  (setq slots-plist
+                        (plist-put slots-plist slot-keyword (cdr provided))))))
+            (setq slot-value slots-plist)))
+        ;; Build the props plist with defaults
+        (dolist (prop-def prop-defs)
+          (let* ((prop-name (twidget-prop-name prop-def))
+                 (prop-keyword (intern (format ":%s" prop-name)))
+                 (provided (assoc prop-keyword collected-props)))
+            (if provided
+                (setq parsed-props
+                      (plist-put parsed-props prop-keyword (cdr provided)))
+              ;; Use default value if available
+              (when (twidget-prop-has-default-p prop-def)
+                (setq parsed-props
+                      (plist-put parsed-props prop-keyword
+                                 (twidget-prop-default prop-def))))))))
+      ;; Call the render function
+      (if extends
+          ;; With inheritance, pass parent-render as third argument
+          (funcall render-fn parsed-props slot-value parent-render-fn)
+        ;; Normal render call
+        (funcall render-fn parsed-props slot-value)))))
+
+(defun twidget-process-slot-value (val)
+  "Process a single slot VAL, recursively parsing widget forms."
+  (cond
+   ((stringp val) val)
+   ((and (listp val)
+         (symbolp (car val))
+         (assoc (car val) twidget-alist))
+    (twidget-parse val))
+   (t (format "%s" val))))
+
+(defun twidget-process-slot-args (args)
+  "Process multiple slot ARGS into a single concatenated string."
+  (let ((slot-parts nil))
+    (dolist (slot-item args)
+      (push (twidget-process-slot-value slot-item) slot-parts))
+    (apply #'concat (nreverse slot-parts))))
+
+(defun twidget-reset ()
+  "Reset all widget definitions."
+  (interactive)
+  (setq twidget-alist nil))
+
+;;; Utilities
+
+(defun twidget-inc (sym num)
+  (let ((str (symbol-value sym)))
+    (set (make-local-variable sym)
+         (number-to-string (+ (string-to-number str) num)))))
+
+(defun twidget-dec (sym num)
+  (let ((str (symbol-value sym)))
+    (set (make-local-variable sym)
+         (number-to-string (- (string-to-number str) num)))))
