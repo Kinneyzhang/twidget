@@ -126,6 +126,41 @@ When the value changes, the UI will be updated automatically."
 (defvar-local twidget-reactive-text-counter 0
   "Counter for generating unique reactive text IDs.")
 
+(defun twidget--parse-dot-notation (var-expr)
+  "Parse VAR-EXPR with dot notation like \"info.name\" or \"items.0\".
+Returns a cons cell (BASE-VAR . ACCESSOR) where:
+  - BASE-VAR is the base variable name (string)
+  - ACCESSOR is nil for simple vars, a keyword for plist access, or an integer for list access.
+Examples:
+  \"count\" -> (\"count\" . nil)
+  \"info.name\" -> (\"info\" . :name)
+  \"items.0\" -> (\"items\" . 0)"
+  (save-match-data
+    (if (string-match "^\\([^.]+\\)\\.\\(.+\\)$" var-expr)
+        (let ((base-var (match-string 1 var-expr))
+              (accessor-str (match-string 2 var-expr)))
+          ;; Check if accessor is a number (list index) or a string (plist key)
+          (if (string-match "^[0-9]+$" accessor-str)
+              (cons base-var (string-to-number accessor-str))
+            (cons base-var (intern (format ":%s" accessor-str)))))
+      ;; No dot notation - simple variable
+      (cons var-expr nil))))
+
+(defun twidget--get-nested-value (value accessor)
+  "Get the nested VALUE using ACCESSOR.
+ACCESSOR is nil (return whole value), a keyword (plist access), or an integer (list access)."
+  (cond
+   ((null accessor) value)
+   ((keywordp accessor)
+    (if (plistp value)
+        (plist-get value accessor)
+      (error "Cannot use keyword access on non-plist value")))
+   ((integerp accessor)
+    (if (listp value)
+        (nth accessor value)
+      (error "Cannot use index access on non-list value")))
+   (t value)))
+
 (defun twidget--apply-reactive-text (text instance-id var-name)
   "Apply reactive tracking to TEXT for INSTANCE-ID with VAR-NAME.
 Returns text with tp.el properties for reactive updates."
@@ -584,27 +619,39 @@ INSTANCE-ID is the widget instance identifier for reactivity."
 (defun twidget--expand-template-string (str bindings instance-id)
   "Expand STR template string with BINDINGS.
 INSTANCE-ID is used for reactive tracking.
-Only applies reactive tracking to individual placeholder values, not the entire string."
+Only applies reactive tracking to individual placeholder values, not the entire string.
+Supports dot notation for nested access:
+  {info.name} - plist property access
+  {items.0} - list index access"
   (let ((result "")
         (start 0))
     ;; Process string segment by segment
     (while (string-match "{\\([^}]+\\)}" str start)
       (let* ((match-start (match-beginning 0))
              (match-end (match-end 0))
-             (var-name (match-string 1 str))
-             (binding (assoc var-name bindings))
-             (ref-info (gethash (cons instance-id var-name) twidget-ref-registry)))
+             (var-expr (match-string 1 str))
+             ;; Parse dot notation: "info.name" -> ("info" . :name)
+             (parsed (twidget--parse-dot-notation var-expr))
+             (base-var (car parsed))
+             (accessor (cdr parsed))
+             (binding (assoc base-var bindings))
+             ;; Check if base variable is a reactive ref
+             (ref-info (gethash (cons instance-id base-var) twidget-ref-registry)))
         ;; Add the non-placeholder part before this match
         (setq result (concat result (substring str start match-start)))
         ;; Add the placeholder value (with reactive tracking if it's a ref)
         (if binding
-            (let ((value (format "%s" (cdr binding))))
+            (let* ((base-value (cdr binding))
+                   ;; Get nested value if accessor is present
+                   (actual-value (twidget--get-nested-value base-value accessor))
+                   (value-str (format "%s" actual-value)))
               (if ref-info
                   ;; This is a reactive ref - apply reactive text tracking
+                  ;; Use full var-expr (e.g., "info.name") as the key for granular updates
                   (setq result (concat result
-                                       (twidget--apply-reactive-text value instance-id var-name)))
+                                       (twidget--apply-reactive-text value-str instance-id var-expr)))
                 ;; Not a reactive ref - just add the value
-                (setq result (concat result value))))
+                (setq result (concat result value-str))))
           ;; No binding found - keep the placeholder as is
           (setq result (concat result (substring str match-start match-end))))
         (setq start match-end)))
@@ -853,32 +900,67 @@ Examples:
                          ;; Notify watchers
                          (dolist (watcher (twidget-ref-watchers ref))
                            (funcall watcher new-value))
-                         ;; Trigger buffer update
-                         (twidget--trigger-update inst-key key new-value)))))))
+                         ;; Trigger buffer update with accessor info for incremental updates
+                         (twidget--trigger-update inst-key key new-value key-or-index value)))))))
              twidget-instances)))
 
-(defun twidget--trigger-update (instance-id var-name value)
+(defun twidget--trigger-update (instance-id var-name value &optional accessor sub-value)
   "Trigger a reactive update for INSTANCE-ID when VAR-NAME changes to VALUE.
 This uses tp.el to update the text in the buffer by updating only the
-reactive symbols associated with the changed variable."
+reactive symbols associated with the changed variable.
+
+When ACCESSOR is provided (keyword for plist, integer for list), also triggers
+incremental updates for the specific property path (e.g., \"info.name\" or \"items.0\").
+SUB-VALUE is the new value for the specific property when ACCESSOR is provided."
+  ;; First, update symbols registered under the base variable name
   (let* ((key (cons instance-id var-name))
          (symbols (gethash key twidget-reactive-symbols)))
-    ;; Update all reactive text symbols for this variable
+    ;; Update all reactive text symbols for this variable (whole value)
     (dolist (sym symbols)
       (when (boundp sym)
-        (set sym (format "%s" value))))))
+        (set sym (format "%s" value)))))
+  ;; Then, if accessor is provided, update symbols for the specific property path
+  (when accessor
+    (let* ((accessor-str (cond
+                          ((keywordp accessor)
+                           ;; Convert :name to "name"
+                           (substring (symbol-name accessor) 1))
+                          ((integerp accessor)
+                           ;; Convert 0 to "0"
+                           (number-to-string accessor))
+                          (t nil)))
+           (property-path (when accessor-str
+                            (format "%s.%s" var-name accessor-str)))
+           (property-key (when property-path
+                           (cons instance-id property-path)))
+           (property-symbols (when property-key
+                               (gethash property-key twidget-reactive-symbols))))
+      ;; Update symbols for the specific property path
+      (dolist (sym property-symbols)
+        (when (boundp sym)
+          (set sym (format "%s" sub-value)))))))
 
 (defun twidget-substitute-placeholders (str bindings)
   "Substitute {variable} placeholders in STR with values from BINDINGS.
-BINDINGS is an alist of (VAR-NAME . VALUE) pairs."
+BINDINGS is an alist of (VAR-NAME . VALUE) pairs.
+Supports dot notation for nested access:
+  {info.name} - plist property access
+  {items.0} - list index access"
   (if (stringp str)
       (replace-regexp-in-string
        "{\\([^}]+\\)}"
        (lambda (match)
-         (let* ((var-name (match-string 1 match))
-                (binding (assoc var-name bindings)))
+         ;; Extract the variable expression from the match
+         (let* ((var-expr (substring match 1 -1)) ; Remove { and }
+                ;; Parse dot notation
+                (parsed (twidget--parse-dot-notation var-expr))
+                (base-var (car parsed))
+                (accessor (cdr parsed))
+                (binding (assoc base-var bindings)))
            (if binding
-               (format "%s" (cdr binding))
+               (let* ((base-value (cdr binding))
+                      (actual-value (twidget--get-nested-value base-value accessor)))
+                 (format "%s" actual-value))
              match)))
        str t t)
     str))
