@@ -528,23 +528,6 @@ Example:
     ;; Runtime extraction (fallback) - cannot capture lexical variables
     `(insert (twidget-parse ,form nil))))
 
-;;; Utilities
-;; ============================================================================
-
-(defun twidget-inc (sym num)
-  "Increment the numeric string value stored in SYM by NUM.
-SYM is a symbol whose value is a string representation of a number."
-  (let ((str (symbol-value sym)))
-    (set (make-local-variable sym)
-         (number-to-string (+ (string-to-number str) num)))))
-
-(defun twidget-dec (sym num)
-  "Decrement the numeric string value stored in SYM by NUM.
-SYM is a symbol whose value is a string representation of a number."
-  (let ((str (symbol-value sym)))
-    (set (make-local-variable sym)
-         (number-to-string (- (string-to-number str) num)))))
-
 ;;; Reactive Data System
 ;; ============================================================================
 
@@ -632,6 +615,25 @@ Returns a cons cell (LOOP-VAR . COLLECTION-NAME) or nil if invalid."
   (when (string-match twidget--for-expression-rx for-expr)
     (cons (match-string 1 for-expr)
           (match-string 2 for-expr))))
+
+;;; Utilities
+;; ============================================================================
+
+(defun twidget-inc (sym num)
+  "Increment the numeric string value stored in SYM by NUM.
+SYM is a symbol whose value is a string representation of a number."
+  (let ((str (twidget-get sym)))
+    (twidget-set
+     (make-local-variable sym)
+     (number-to-string (+ (string-to-number str) num)))))
+
+(defun twidget-dec (sym num)
+  "Decrement the numeric string value stored in SYM by NUM.
+SYM is a symbol whose value is a string representation of a number."
+  (let ((str (twidget-get sym)))
+    (twidget-set
+     (make-local-variable sym)
+     (number-to-string (- (string-to-number str) num)))))
 
 ;;; Built-in widgets
 
