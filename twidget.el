@@ -1,8 +1,64 @@
+;;; twidget.el --- Declarative text widget library for Emacs -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2024 Kinney Zhang
+
+;; Author: Kinney Zhang <kinneyzhang666@gmail.com>
+;; URL: https://github.com/Kinneyzhang/twidget
+;; Version: 0.1.0
+;; Package-Requires: ((emacs "26.1") (tp "0.1"))
+;; Keywords: convenience, text, widgets
+
+;; This file is not part of GNU Emacs.
+
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+;;; Commentary:
+
+;; Twidget (Text Widget) is a declarative text widget library for Emacs,
+;; inspired by modern UI component frameworks like Vue.js and React.
+;;
+;; Features:
+;; - Property system with required/optional properties and defaults
+;; - Slot system for flexible content composition
+;; - Widget inheritance for creating specialized variants
+;; - Seamless integration with Emacs text properties
+;;
+;; Quick Example:
+;;
+;;   (define-twidget my-button
+;;     :props '((label . "Click"))
+;;     :slot t
+;;     :render (lambda (props slot)
+;;               (tp-set slot 'face 'button)))
+;;
+;;   (twidget-parse '(my-button "Hello"))
+;;
+;; See README.md for more examples and documentation.
+
+;;; Code:
+
 (require 'tp)
+
+;;; Variables
+;; ============================================================================
 
 (defvar twidget-alist nil
   "Alist of widget definitions: (WIDGET-NAME . DEFINITION).
 Each DEFINITION is a plist with :props, :slot, and :render keys.")
+
+;;; Widget Definition
+;; ============================================================================
 
 (defmacro define-twidget (name &rest args)
   "Define a text widget (widget) named NAME.
@@ -124,6 +180,9 @@ RENDER is the render function."
         (push (cons name definition) twidget-alist)))
     (assoc name twidget-alist)))
 
+;;; Property Helpers
+;; ============================================================================
+
 (defun twidget-props (parent-props child-props)
   "Merge PARENT-PROPS with CHILD-PROPS.
 Child props override parent props with the same name.
@@ -168,6 +227,9 @@ Returns nil if no default is specified."
   "Return non-nil if PROP-DEF has a default value."
   (consp prop-def))
 
+;;; Slot Helpers
+;; ============================================================================
+
 (defun twidget-slot-is-named-p (slot-def)
   "Return non-nil if SLOT-DEF defines named slots (a list of symbols)."
   (and (listp slot-def)
@@ -188,6 +250,9 @@ SLOT-DEF is the list of defined slot names."
 Returns the slot name as a symbol (e.g., \\='header)."
   (let ((name (symbol-name (car slot-sexp))))
     (intern (substring name 5))))
+
+;;; Widget Parsing
+;; ============================================================================
 
 (defun twidget-parse (widget-form)
   "Parse and render a widget invocation.
@@ -322,13 +387,21 @@ Ignoring arguments: %S" widget-name args)))
   (setq twidget-alist nil))
 
 ;;; Utilities
+;; ============================================================================
 
 (defun twidget-inc (sym num)
+  "Increment the numeric string value stored in SYM by NUM.
+SYM is a symbol whose value is a string representation of a number."
   (let ((str (symbol-value sym)))
     (set (make-local-variable sym)
          (number-to-string (+ (string-to-number str) num)))))
 
 (defun twidget-dec (sym num)
+  "Decrement the numeric string value stored in SYM by NUM.
+SYM is a symbol whose value is a string representation of a number."
   (let ((str (symbol-value sym)))
     (set (make-local-variable sym)
          (number-to-string (- (string-to-number str) num)))))
+
+(provide 'twidget)
+;;; twidget.el ends here
