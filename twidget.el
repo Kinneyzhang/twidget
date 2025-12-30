@@ -1036,40 +1036,19 @@ Returns the twidget-ref object."
 
 ;;; Built-in widgets
 
-(define-tp tp-button (plist)
-  (let ((action (plist-get plist :action))
-        (bgcolor (plist-get plist :bgcolor)))
-    `( face ( :box (:color "gray" :line-width (2 . 2)
-                           :style released-button)
-              :background ,bgcolor)
-       keymap ,(let ((keymap (make-sparse-keymap)))
-                 (define-key keymap (kbd "<RET>") action)
-                 (define-key keymap [mouse-1] action)
-                 keymap))))
-
-(define-tp tp-space (pixel)
-  `(display (space :width (,pixel))))
-
-(define-tp tp-headline (props)
-  (let (height boldp)
-    (cond ((floatp props)
-           (setq height props boldp t))
-          ((plistp props)
-           (setq height (plist-get props :height)
-                 boldp (plist-get props :bold))))
-    `(face (:height ,height
-                    ,@(when boldp '(:weight bold))))))
-
 (define-twidget button
   :slot t
-  :props '(action (bgcolor . "orange"))
+  :props '(action color bgcolor)
   :render (lambda (props slot)
             (let ((action (plist-get props :action))
+                  (color (plist-get props :color))
                   (bgcolor (plist-get props :bgcolor)))
               (tp-add (format "%s%s%s"
                               (tp-set " " 'tp-space 6)
                               slot (tp-set " " 'tp-space 6))
-                      'tp-button `(:bgcolor ,bgcolor :action ,action)))))
+                      'tp-button `( :action ,action
+                                    :color ,color
+                                    :bgcolor ,bgcolor)))))
 
 (define-twidget p
   :slot t :render (lambda (_props slot)
