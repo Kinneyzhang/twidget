@@ -1038,17 +1038,14 @@ Returns the twidget-ref object."
 
 (define-twidget button
   :slot t
-  :props '(action color bgcolor)
+  :props '((palette . info) action)
   :render (lambda (props slot)
             (let ((action (plist-get props :action))
-                  (color (plist-get props :color))
-                  (bgcolor (plist-get props :bgcolor)))
+                  (palette (plist-get props :palette)))
               (tp-add (format "%s%s%s"
                               (tp-set " " 'tp-space 6)
                               slot (tp-set " " 'tp-space 6))
-                      'tp-button `( :action ,action
-                                    :color ,color
-                                    :bgcolor ,bgcolor)))))
+                      'tp-button `(:action ,action :palette ,palette)))))
 
 (define-twidget p
   :slot t :render (lambda (_props slot)
