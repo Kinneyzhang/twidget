@@ -1503,48 +1503,53 @@ Returns a lambda function that can be used as an event handler."
            (let ((resolved-value (twidget--resolve-value value-parsed bindings-plist)))
              (twidget-set (intern var-name) resolved-value)))))
 
-      ;; Multi-statement
+      ;; Multi-statement - pre-compile all handlers at definition time
       ('multi-statement
-       (let ((statements (plist-get parsed-expr :statements)))
+       (let* ((statements (plist-get parsed-expr :statements))
+              ;; Pre-compile all statement handlers
+              (compiled-handlers (mapcar (lambda (stmt)
+                                           (twidget--compile-event-handler stmt bindings-plist))
+                                         statements)))
          (lambda ()
            (interactive)
-           (dolist (stmt statements)
-             (let ((handler (twidget--compile-event-handler stmt bindings-plist)))
-               (funcall handler))))))
+           (dolist (handler compiled-handlers)
+             (funcall handler)))))
 
-      ;; Ternary expression
+      ;; Ternary expression - pre-compile both branches
       ('ternary
-       (let ((condition-str (plist-get parsed-expr :condition))
-             (true-expr (plist-get parsed-expr :true-expr))
-             (false-expr (plist-get parsed-expr :false-expr)))
+       (let* ((condition-str (plist-get parsed-expr :condition))
+              (true-expr (plist-get parsed-expr :true-expr))
+              (false-expr (plist-get parsed-expr :false-expr))
+              ;; Pre-compile both branch handlers
+              (true-handler (twidget--compile-event-handler true-expr bindings-plist))
+              (false-handler (twidget--compile-event-handler false-expr bindings-plist)))
          (lambda ()
            (interactive)
-           (let ((condition-result (twidget--eval-condition condition-str bindings-plist)))
-             (if condition-result
-                 (let ((handler (twidget--compile-event-handler true-expr bindings-plist)))
-                   (funcall handler))
-               (let ((handler (twidget--compile-event-handler false-expr bindings-plist)))
-                 (funcall handler)))))))
+           (if (twidget--eval-condition condition-str bindings-plist)
+               (funcall true-handler)
+             (funcall false-handler)))))
 
-      ;; Logical AND
+      ;; Logical AND - pre-compile action handler
       ('logical-and
-       (let ((condition-str (plist-get parsed-expr :condition))
-             (action-expr (plist-get parsed-expr :action)))
+       (let* ((condition-str (plist-get parsed-expr :condition))
+              (action-expr (plist-get parsed-expr :action))
+              ;; Pre-compile action handler
+              (action-handler (twidget--compile-event-handler action-expr bindings-plist)))
          (lambda ()
            (interactive)
            (when (twidget--eval-condition condition-str bindings-plist)
-             (let ((handler (twidget--compile-event-handler action-expr bindings-plist)))
-               (funcall handler))))))
+             (funcall action-handler)))))
 
-      ;; Logical OR
+      ;; Logical OR - pre-compile action handler
       ('logical-or
-       (let ((condition-str (plist-get parsed-expr :condition))
-             (action-expr (plist-get parsed-expr :action)))
+       (let* ((condition-str (plist-get parsed-expr :condition))
+              (action-expr (plist-get parsed-expr :action))
+              ;; Pre-compile action handler
+              (action-handler (twidget--compile-event-handler action-expr bindings-plist)))
          (lambda ()
            (interactive)
            (unless (twidget--eval-condition condition-str bindings-plist)
-             (let ((handler (twidget--compile-event-handler action-expr bindings-plist)))
-               (funcall handler))))))
+             (funcall action-handler)))))
 
       ;; Raw expression - eval as elisp
       ('raw-expression
