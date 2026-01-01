@@ -808,8 +808,7 @@ Block element handling follows HTML-like rules:
 - Inline elements flow together without automatic newlines"
   (let ((result "")
         (forms-list forms)
-        (len (length forms))
-        (prev-was-block nil))
+        (len (length forms)))
     (dotimes (i len)
       (let* ((form (nth i forms-list))
              (is-first (= i 0))
@@ -827,8 +826,7 @@ Block element handling follows HTML-like rules:
         ;; (Block elements are followed by a newline)
         (when (and is-block (not is-last))
           (unless (string-suffix-p "\n" result)
-            (setq result (concat result "\n"))))
-        (setq prev-was-block is-block)))
+            (setq result (concat result "\n"))))))
     result))
 
 (defun twidget--expand-template-string (str bindings instance-id)
