@@ -1,22 +1,69 @@
-# twidget
+<div align="center">
 
-一个为 Emacs 设计的声明式文本组件库，灵感来自现代 UI 组件框架。
+# 🎨 twidget
+
+**一个受现代 UI 组件框架启发的 Emacs 声明式文本组件库**
+
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Emacs](https://img.shields.io/badge/Emacs-26.1+-purple.svg)](https://www.gnu.org/software/emacs/)
 
 [English](README.md) | 中文
 
-## 概述
+</div>
 
-`twidget`（Text Widget）提供了一种强大而灵活的方式来定义 Emacs 中的可复用文本组件。它提供了类似于现代前端框架的声明式语法，支持：
+---
 
-- **属性系统** - 定义必选和可选属性，支持默认值
-- **插槽系统** - 支持单一插槽和命名插槽，实现灵活的内容组合
-- **组件继承** - 扩展父组件以创建特定变体
-- **文本属性** - 与 Emacs 文本属性无缝集成
-- **响应式数据** - 使用 `twidget-ref` 创建响应式 UI，自动更新
-- **复合组件** - 使用 `:setup` 和 `:template` 构建复杂组件
-- **事件系统** - 类似 Vue3 的声明式事件绑定，支持 `:on-click` 和内联表达式
+## 📑 目录
 
-## 安装
+- [概述](#-概述)
+- [特性](#-特性)
+- [安装](#-安装)
+- [快速开始](#-快速开始)
+- [核心概念](#-核心概念)
+  - [简单组件](#使用-render-的简单组件)
+  - [复合组件](#使用-setup-和-template-的复合组件)
+  - [属性系统](#属性系统)
+  - [插槽系统](#插槽系统)
+  - [组件继承](#组件继承)
+- [响应式系统](#-响应式系统)
+- [事件系统](#-事件系统)
+- [内置组件](#-内置组件)
+- [API 参考](#-api-参考)
+- [示例](#-示例)
+- [贡献](#-贡献)
+- [许可证](#-许可证)
+
+---
+
+## 🌟 概述
+
+**twidget**（Text Widget）为 Emacs 提供了一种强大而灵活的方式来定义可复用的文本组件。它将现代前端开发模式引入 Emacs，让你能够使用类似 Vue.js 和 React 的声明式语法构建复杂的交互式文本界面。
+
+### 为什么选择 twidget？
+
+- **声明式**: 定义组件的*外观*，而不是*如何渲染*
+- **可组合**: 通过组合简单组件构建复杂 UI
+- **响应式**: 数据变化时 UI 自动更新
+- **熟悉感**: 如果你了解 Vue.js 或 React，会感到很亲切
+
+---
+
+## ✨ 特性
+
+| 特性 | 描述 |
+|------|------|
+| 🏷️ **属性系统** | 定义必选和可选属性，支持默认值 |
+| 📦 **插槽系统** | 单一插槽和命名插槽，实现灵活的内容组合 |
+| 🧬 **组件继承** | 扩展父组件以创建特化变体 |
+| 🎨 **文本属性** | 通过 [tp](https://github.com/Kinneyzhang/tp) 与 Emacs 文本属性无缝集成 |
+| ⚡ **响应式数据** | 使用 `twidget-ref` 创建响应式 UI，自动更新 |
+| 🧩 **复合组件** | 使用 `:setup` 和 `:template` 构建复杂组件 |
+| 🖱️ **事件系统** | 类似 Vue3 的声明式事件绑定，支持 `:on-click` 和内联表达式 |
+| 🔄 **循环指令** | 使用 `:for` 指令遍历集合 |
+
+---
+
+## 📦 安装
 
 ### 依赖
 
@@ -24,143 +71,188 @@
 
 ### 手动安装
 
-1. 克隆此仓库：
-   ```bash
-   git clone https://github.com/Kinneyzhang/twidget.git
-   ```
+```bash
+# 克隆两个仓库
+git clone https://github.com/Kinneyzhang/tp.git
+git clone https://github.com/Kinneyzhang/twidget.git
+```
 
-2. 添加到 Emacs 配置中：
-   ```elisp
-   (add-to-list 'load-path "/path/to/twidget")
-   (require 'twidget)
-   ```
+```elisp
+;; 添加到你的 Emacs 配置中
+(add-to-list 'load-path "/path/to/tp")
+(add-to-list 'load-path "/path/to/twidget")
+(require 'twidget)
+```
 
 ### 使用 use-package 和 straight.el
 
 ```elisp
+(use-package tp
+  :straight (:host github :repo "Kinneyzhang/tp"))
+
 (use-package twidget
   :straight (:host github :repo "Kinneyzhang/twidget")
   :after tp)
 ```
 
-## 快速开始
-
-### 定义简单组件
+### 使用 Quelpa
 
 ```elisp
-;; 定义一个带有单一插槽的段落组件
-(define-twidget p
-  :slot t
-  :render (lambda (props slot)
-            (concat slot "\n")))
+(quelpa '(tp :fetcher github :repo "Kinneyzhang/tp"))
+(quelpa '(twidget :fetcher github :repo "Kinneyzhang/twidget"))
+(require 'twidget)
+```
+
+---
+
+## 🚀 快速开始
+
+### 你的第一个组件
+
+```elisp
+;; 定义一个简单的问候组件
+(define-twidget greeting
+  :props '((name . "World"))
+  :render (lambda (props _slot)
+            (format "Hello, %s!\n" (plist-get props :name))))
 
 ;; 使用组件
-(twidget-parse '(p "Hello, World!"))
+(twidget-parse '(greeting))
 ;; => "Hello, World!\n"
+
+(twidget-parse '(greeting :name "Emacs"))
+;; => "Hello, Emacs!\n"
 ```
 
-### 带属性的组件
+### 交互式计数器（试一试！）
+
+复制并在 Emacs 中执行以下代码，查看可交互的计数器：
 
 ```elisp
-;; 定义一个带颜色属性的文本组件
-(define-twidget styled-text
-  :props '((color . "black"))
-  :slot t
+(define-twidget counter
+  :setup (lambda (_props _slot)
+           (list :count (twidget-ref 0)))
+  :template '(div
+              (span "计数: {count} ")
+              (span :on-click "count++" "[+]")
+              (span " ")
+              (span :on-click "count--" "[-]")
+              (span " ")
+              (span :on-click "count=0" "[重置]")))
+
+;; 在缓冲区中显示计数器
+(tp-pop-to-buffer "*counter-demo*"
+  (twidget-insert '(counter)))
+```
+
+点击 `[+]`、`[-]` 或 `[重置]` 与计数器交互！
+
+---
+
+## 📚 核心概念
+
+twidget 支持两种定义组件的方式：
+
+### 使用 `:render` 的简单组件
+
+对于直接产生输出的组件，使用 `:render`：
+
+```elisp
+(define-twidget my-text
+  :props '((color . "black"))    ; 带默认值的属性
+  :slot t                         ; 接受插槽内容
   :render (lambda (props slot)
+            ;; props: 属性的 plist (:color "black")
+            ;; slot: 传递给组件的内容
             (tp-set slot 'face `(:foreground ,(plist-get props :color)))))
 
-;; 使用自定义颜色
-(twidget-parse '(styled-text :color "blue" "彩色文本"))
+;; 使用
+(twidget-parse '(my-text :color "red" "你好！"))
 ```
 
-### 嵌套组件
+### 使用 `:setup` 和 `:template` 的复合组件
+
+对于组合其他组件并具有响应式状态的组件：
 
 ```elisp
-;; 组件可以嵌套使用
-(twidget-parse
- '(p "开始 "
-     (styled-text :color "red" "重要内容")
-     " 结束"))
+(define-twidget toggle-button
+  :props '((label . "切换"))
+  :setup (lambda (props _slot)
+           ;; 初始化响应式状态
+           (list :active (twidget-ref nil)
+                 :buttonLabel (plist-get props :label)))
+  :template '(span :on-click "active = !active"
+                   "[{buttonLabel}: {active}]"))
+
+;; 使用
+(twidget-parse '(toggle-button :label "深色模式"))
 ```
 
-## API 参考
+### 属性系统
 
-### `define-twidget`
+属性定义了组件的可配置部分：
 
 ```elisp
-(define-twidget NAME &rest ARGS)
+(define-twidget styled-box
+  :props '(
+    title               ; 必选属性（无默认值）
+    (width . 20)        ; 可选属性带默认值
+    (border . t)        ; 布尔属性
+  )
+  :slot t
+  :render (lambda (props slot)
+            (let ((title (plist-get props :title))
+                  (width (plist-get props :width))
+                  (border (plist-get props :border)))
+              (if border
+                  (format "┌%s┐\n│ %s │\n│ %s │\n└%s┘\n"
+                          (make-string width ?─)
+                          (format (format "%%-%ds" (- width 2)) title)
+                          (format (format "%%-%ds" (- width 2)) slot)
+                          (make-string width ?─))
+                (format "%s\n%s\n" title slot)))))
+
+;; 使用
+(twidget-parse '(styled-box :title "注意" :width 30 "这是内容"))
 ```
 
-定义一个名为 NAME 的文本组件。
+### 插槽系统
 
-**关键字参数：**
+插槽允许你向组件传递内容：
 
-| 关键字 | 描述 |
-|--------|------|
-| `:props` | 属性定义。可以是符号（必选）或 cons 单元 `(symbol . default)` |
-| `:slot` | 布尔值或列表。`nil`（无插槽）、`t`（单一插槽）或插槽名称列表 |
-| `:slots` | `:slot` 的别名，用于命名插槽 |
-| `:extends` | 要继承的父组件符号 |
-| `:render` | 返回渲染字符串的 lambda 函数（用于简单组件） |
-| `:setup` | 返回响应式绑定 plist 的 lambda 函数（用于复合组件） |
-| `:template` | 组件结构的模板 sexp（用于复合组件） |
-
-**两种定义组件的方式：**
-
-1. **简单组件** - 使用 `:render` 直接渲染
-2. **复合组件** - 使用 `:setup` 和 `:template` 组合响应式数据
-
-**渲染函数签名：**
-
-- 单一插槽：`(lambda (props slot) ...)`
-- 命名插槽：`(lambda (props slots) ...)` 其中 slots 是一个 plist
-- 带继承：`(lambda (props slot parent-render) ...)`
-
-### `twidget-parse`
+#### 单一插槽
 
 ```elisp
-(twidget-parse WIDGET-FORM)
+(define-twidget wrapper
+  :slot t    ; 启用单一插槽
+  :render (lambda (_props slot)
+            (concat "<<< " slot " >>>")))
+
+(twidget-parse '(wrapper "你好"))
+;; => "<<< 你好 >>>"
 ```
 
-解析并渲染组件调用。返回应用了文本属性的渲染字符串。
-
-**WIDGET-FORM 格式：**
-```elisp
-(WIDGET-NAME :prop1 val1 :prop2 val2 ... SLOT-VALUES...)
-```
-
-### `twidget-reset`
-
-```elisp
-(twidget-reset)
-```
-
-重置所有组件定义。在开发和测试时很有用。
-
-## 高级特性
-
-### 命名插槽
-
-命名插槽允许您指定不同内容的放置位置：
+#### 命名插槽
 
 ```elisp
 (define-twidget card
   :slots '(header content footer)
-  :render (lambda (props slots)
-            (concat "┌──────────────────┐\n"
-                    "│ " (or (plist-get slots :header) "") "\n"
-                    "├──────────────────┤\n"
-                    "│ " (or (plist-get slots :content) "") "\n"
-                    "├──────────────────┤\n"
-                    "│ " (or (plist-get slots :footer) "") "\n"
-                    "└──────────────────┘\n")))
+  :render (lambda (_props slots)
+            (concat
+             "╭────────────────────╮\n"
+             "│ " (or (plist-get slots :header) "无标题") "\n"
+             "├────────────────────┤\n"
+             "│ " (or (plist-get slots :content) "") "\n"
+             "├────────────────────┤\n"
+             "│ " (or (plist-get slots :footer) "") "\n"
+             "╰────────────────────╯\n")))
 
 ;; 使用命名插槽
 (twidget-parse
  '(card
-   (slot-header "标题")
-   (slot-content "这里是主要内容")
-   (slot-footer "页脚文本")))
+   (slot-header "我的卡片标题")
+   (slot-content "这是主要内容。")
+   (slot-footer "页脚信息")))
 ```
 
 ### 组件继承
@@ -168,304 +260,131 @@
 通过扩展基础组件创建特化组件：
 
 ```elisp
-;; 基础按钮组件
-(define-twidget base-button
-  :props '((type . "default"))
+;; 基础组件
+(define-twidget alert-base
+  :props '((type . "info")
+           (dismissible . nil))
   :slot t
   :render (lambda (props slot)
-            (tp-set slot 'face 'button)))
+            (let ((icon (pcase (plist-get props :type)
+                          ("info" "ℹ️")
+                          ("warning" "⚠️")
+                          ("error" "❌")
+                          ("success" "✅")
+                          (_ "📝"))))
+              (format "%s %s\n" icon slot))))
 
-;; 继承 base-button 的主按钮
-(define-twidget primary-button
-  :extends 'base-button
-  :props '((type . "primary"))
+;; 派生组件 - 继承并覆盖
+(define-twidget error-alert
+  :extends 'alert-base
+  :props '((type . "error"))    ; 覆盖默认类型
   :render (lambda (props slot parent-render)
+            ;; 调用父组件渲染并添加样式
             (let ((result (funcall parent-render props slot)))
-              (tp-add result 'face '(:foreground "blue")))))
+              (tp-set result 'face '(:foreground "red")))))
 
 ;; 使用
-(twidget-parse '(primary-button "点击我"))
+(twidget-parse '(error-alert "出错了！"))
+;; => "❌ 出错了！\n" (带红色前景)
 ```
 
-### 属性继承
+---
 
-子组件从父组件继承属性，子组件的属性优先级更高：
+## ⚡ 响应式系统
+
+响应式系统允许 UI 在数据变化时自动更新。
+
+### 创建响应式数据
 
 ```elisp
-(define-twidget parent-widget
-  :props '((size . "medium")
-           (color . "gray"))
-  :slot t
-  :render ...)
-
-(define-twidget child-widget
-  :extends 'parent-widget
-  :props '((color . "blue"))  ; 覆盖父组件的 color，继承 size
-  :render ...)
+;; 在 :setup 函数中，使用 twidget-ref 创建响应式值
+:setup (lambda (_props _slot)
+         (list :count (twidget-ref 0)
+               :name (twidget-ref "Emacs")
+               :items (twidget-ref '("苹果" "香蕉" "橙子"))))
 ```
 
-### 使用响应式数据的复合组件
+### 在模板中绑定响应式数据
 
-对于组合其他组件并具有响应式数据的复杂组件，使用 `:setup` 和 `:template`：
+在模板字符串中使用 `{varname}` 语法：
 
 ```elisp
-;; 定义一个带响应式状态的计数器组件
-(define-twidget my-counter
-  :slot t
-  :setup (lambda (_props slot)
-           ;; 返回包含响应式绑定的 plist
-           ;; slot 包含传递给组件的插槽内容
-           (list :count (twidget-ref slot)))
-  :template '(p (span "{count}")
-                " "
-                (button :action (lambda ()
-                                  (interactive)
-                                  (twidget-inc 'count 1))
-                        "+")
-                " "
-                (button :action (lambda ()
-                                  (interactive)
-                                  (twidget-dec 'count 1))
-                        "-")))
-
-;; 使用计数器，通过插槽传递初始值
-(twidget-parse '(my-counter "0"))
+:template '(div
+            (span "你好，{name}！")
+            (span "计数：{count}"))
 ```
 
-**关键概念：**
+### 访问嵌套值
 
-- **`twidget-ref`** - 创建响应式引用。当值改变时，UI 自动更新。
-- **`:setup`** - 接收 props 和 slot，返回响应式绑定 plist 的函数。
-- **`:template`** - 定义组件结构的 quoted sexp。使用 `{varname}` 语法绑定响应式数据。
-
-### 响应式数据 API
+使用点号表示法进行嵌套访问：
 
 ```elisp
-;; 创建响应式引用
-(twidget-ref "初始值")
+:setup (lambda (_props _slot)
+         (list :user (twidget-ref '(:name "张三" :age 30))
+               :items (twidget-ref '("甲" "乙" "丙"))))
 
-;; 获取响应式值
-(twidget-get 'varname)
-
-;; 设置响应式值（触发 UI 更新）
-(twidget-set 'varname "新值")
-
-;; 增加/减少数值
-(twidget-inc 'varname 1)
-(twidget-dec 'varname 1)
+:template '(div
+            (span "姓名：{user.name}")    ; plist 访问
+            (span "年龄：{user.age}")
+            (span "第一个：{items.0}"))   ; 列表索引访问
 ```
 
-## 实用函数
+### 响应式 API 参考
 
-### `twidget-ref`
-
-```elisp
-(twidget-ref INITIAL-VALUE)
-```
-
-创建带有初始值 INITIAL-VALUE 的响应式引用。返回可在 `:setup` 函数中使用的 twidget-ref 对象。
-
-### `twidget-get`
-
-```elisp
-(twidget-get SYM &optional KEY-OR-INDEX)
-```
-
-获取响应式变量 SYM 的当前值。
-
-对于 plist/list 类型的值，可以访问嵌套值：
-- 使用关键字（如 `:name`）访问 plist 属性
-- 使用整数索引（从 0 开始）访问列表元素
-
-```elisp
-;; 获取整个值
-(twidget-get 'user)
-
-;; 从 plist 值中获取 :name
-(twidget-get 'user :name)
-
-;; 从列表值中获取第一个元素
-(twidget-get 'items 0)
-```
-
-### `twidget-set`
-
-```elisp
-(twidget-set SYM VALUE &optional KEY-OR-INDEX)
-```
-
-将响应式变量 SYM 的值设置为 VALUE。这会触发缓冲区中的响应式更新。
-
-对于 plist/list 类型的值，可以设置嵌套值：
-- 使用关键字（如 `:name`）设置 plist 属性
-- 使用整数索引（从 0 开始）设置列表元素
-
-```elisp
-;; 设置整个值
-(twidget-set 'user new-user)
-
-;; 设置 plist 值中的 :name
-(twidget-set 'user "John" :name)
-
-;; 设置列表值中的第一个元素
-(twidget-set 'items "new-item" 0)
-```
-
-### `twidget-inc`
-
-```elisp
-(twidget-inc SYM NUM)
-```
-
-将响应式变量 SYM 中存储的数值增加 NUM。
-
-### `twidget-dec`
-
-```elisp
-(twidget-dec SYM NUM)
-```
-
-将响应式变量 SYM 中存储的数值减少 NUM。
-
-## 事件系统
-
-Twidget 提供了类似 Vue3 的声明式事件系统，允许在组件模板中通过 `:on-*` 语法直接绑定事件处理器。
-
-### 基本事件绑定
-
-```elisp
-;; 简单点击处理器
-(define-twidget my-button
-  :slot t
-  :setup (lambda (_props slot)
-           (list :label (twidget-ref slot)
-                 :handleClick (lambda ()
-                                (message "按钮被点击了！"))))
-  :template '(span :on-click "handleClick" "{label}"))
-
-(twidget-parse '(my-button "点击我"))
-```
-
-### 支持的表达式格式
-
-| 格式 | 示例 | 说明 |
+| 函数 | 描述 | 示例 |
 |------|------|------|
-| 方法引用 | `"doSomething"` | 调用 `:setup` 中定义的方法 |
-| 带参数方法调用 | `"doSomething(foo, 'bar')"` | 带参数调用方法 |
-| 递增 | `"count++"` | 递增响应式变量 |
-| 递减 | `"count--"` | 递减响应式变量 |
-| 赋值 | `"count=10"` | 给变量赋值 |
-| 取反 | `"flag=!flag"` | 切换布尔值 |
-| 多语句 | `"a++ ; b++"` | 执行多个语句 |
-| 三元表达式 | `"flag ? doA() : doB()"` | 条件执行 |
-| 逻辑与 | `"enabled && doAction()"` | 条件为真时执行 |
-| 逻辑或 | `"!enabled \|\| showWarning()"` | 条件为假时执行 |
+| `twidget-ref` | 创建响应式引用 | `(twidget-ref 0)` |
+| `twidget-get` | 获取响应式值 | `(twidget-get 'count)` |
+| `twidget-set` | 设置响应式值 | `(twidget-set 'count 10)` |
+| `twidget-inc` | 增加数值 | `(twidget-inc 'count 1)` |
+| `twidget-dec` | 减少数值 | `(twidget-dec 'count 1)` |
 
-### 事件系统示例
-
-#### 计数器（递增/递减）
+#### 访问嵌套属性
 
 ```elisp
-(define-twidget counter
-  :setup (lambda (_props _slot)
-           (list :count (twidget-ref 0)))
-  :template '(div
-              (span "{count}")
-              " "
-              (span :on-click "count++" "[+]")
-              " "
-              (span :on-click "count--" "[-]")
-              " "
-              (span :on-click "count=0" "[重置]")))
+;; 获取嵌套属性
+(twidget-get 'user :name)      ; 从 plist 获取 :name
+(twidget-get 'items 0)         ; 从列表获取第一个元素
 
-(tp-pop-to-buffer "*counter-demo*"
-  (twidget-insert '(counter)))
+;; 设置嵌套属性
+(twidget-set 'user "李四" :name)  ; 设置 plist 中的 :name
+(twidget-set 'items "丁" 0)       ; 设置列表中的第一个元素
 ```
 
-#### 开关切换
+---
+
+## 🖱️ 事件系统
+
+事件系统提供类似 Vue3 的声明式事件绑定。
+
+### 基本点击处理器
 
 ```elisp
-(define-twidget toggle-switch
+(define-twidget click-demo
   :setup (lambda (_props _slot)
-           (list :on (twidget-ref nil)
-                 :notify (lambda ()
-                           (message (if (twidget-get 'on) "开启！" "关闭！")))))
-  :template '(div
-              (span :on-click "on = !on ; notify()" "[切换: {on}]")))
-
-(tp-pop-to-buffer "*toggle-demo*"
-  (twidget-insert '(toggle-switch)))
+           (list :handleClick (lambda ()
+                                (message "点击了！"))))
+  :template '(span :on-click "handleClick" "[点击我]"))
 ```
 
-#### 双计数器（多语句）
+### 表达式类型
 
-```elisp
-(define-twidget dual-counter
-  :setup (lambda (_props _slot)
-           (list :a (twidget-ref 0)
-                 :b (twidget-ref 0)))
-  :template '(div
-              (span "A: {a}, B: {b}")
-              " "
-              (span :on-click "a++;b++" "[同时+1]")))
+| 表达式 | 示例 | 描述 |
+|--------|------|------|
+| 方法引用 | `:on-click "doSomething"` | 调用 `:setup` 中的方法 |
+| 带参数方法 | `:on-click "greet('你好')"` | 带参数的方法 |
+| 递增 | `:on-click "count++"` | 递增响应式变量 |
+| 递减 | `:on-click "count--"` | 递减响应式变量 |
+| 赋值 | `:on-click "count=0"` | 赋值 |
+| 切换 | `:on-click "flag=!flag"` | 切换布尔值 |
+| 多语句 | `:on-click "a++;b++"` | 多个语句（`;` 分隔） |
+| 三元表达式 | `:on-click "flag ? on() : off()"` | 条件执行 |
+| 逻辑与 | `:on-click "enabled && action()"` | 条件为真时执行 |
+| 逻辑或 | `:on-click "!enabled \|\| warn()"` | 条件为假时执行 |
 
-(tp-pop-to-buffer "*dual-counter-demo*"
-  (twidget-insert '(dual-counter)))
-```
+### 条件运算符
 
-#### 条件执行
-
-```elisp
-(define-twidget conditional-action
-  :setup (lambda (_props _slot)
-           (list :enabled (twidget-ref t)
-                 :doAction (lambda () (message "动作已执行！"))
-                 :toggleEnabled (lambda ()
-                                  (twidget-set 'enabled (not (twidget-get 'enabled))))))
-  :template '(div
-              (span :on-click "toggleEnabled" "[{enabled}]")
-              " "
-              (span :on-click "enabled && doAction()" "[启用时执行]")))
-
-(tp-pop-to-buffer "*conditional-demo*"
-  (twidget-insert '(conditional-action)))
-```
-
-#### 三元表达式
-
-```elisp
-(define-twidget ternary-demo
-  :setup (lambda (_props _slot)
-           (list :flag (twidget-ref t)
-                 :showOn (lambda () (message "开启状态！"))
-                 :showOff (lambda () (message "关闭状态！"))
-                 :toggle (lambda ()
-                           (twidget-set 'flag (not (twidget-get 'flag))))))
-  :template '(div
-              (span :on-click "toggle" "[切换]")
-              " "
-              (span :on-click "flag ? showOn() : showOff()" "[显示状态]")))
-
-(tp-pop-to-buffer "*ternary-demo*"
-  (twidget-insert '(ternary-demo)))
-```
-
-### 事件处理器参数类型
-
-事件处理器支持多种参数类型：
-
-| 类型 | 示例 | 说明 |
-|------|------|------|
-| 字符串 | `"greet('hello')"` | 单引号或双引号 |
-| 数字 | `"setCount(42)"` | 整数或浮点数 |
-| 布尔值 | `"setFlag(true)"` | `true`、`false` 或 `nil` |
-| 变量 | `"greet(name)"` | 引用 setup 中的变量 |
-
-### 比较运算符
-
-条件表达式支持以下运算符：
-
-| 运算符 | 示例 | 说明 |
+| 运算符 | 示例 | 描述 |
 |--------|------|------|
 | `===` | `count === 0` | 严格相等 |
 | `==` | `count == 0` | 相等 |
@@ -474,11 +393,138 @@ Twidget 提供了类似 Vue3 的声明式事件系统，允许在组件模板中
 | `<` | `count < 10` | 小于 |
 | `!` | `!flag` | 逻辑非 |
 
-更多详情请参阅 [事件系统文档](docs/event-system.md)。
+### 完整事件示例
 
-## 示例
+```elisp
+(define-twidget todo-item
+  :props '((text . ""))
+  :setup (lambda (props _slot)
+           (list :done (twidget-ref nil)
+                 :text (plist-get props :text)
+                 :toggle (lambda ()
+                           (twidget-set 'done (not (twidget-get 'done))))))
+  :template '(div
+              (span :on-click "toggle"
+                    "[{done}] {text}")))
 
-### 创建徽章组件
+(tp-pop-to-buffer "*todo-demo*"
+  (twidget-insert
+   '(div
+     (todo-item :text "学习 Emacs Lisp")
+     (todo-item :text "构建组件")
+     (todo-item :text "创建出色的 UI"))))
+```
+
+更多详情请参阅[事件系统文档](docs/event-system.md)。
+
+---
+
+## 🧱 内置组件
+
+twidget 自带常用组件：
+
+| 组件 | 描述 | 示例 |
+|------|------|------|
+| `p` | 段落（添加换行） | `(p "文本")` |
+| `div` | 块容器（添加换行） | `(div "内容")` |
+| `span` | 行内容器 | `(span "行内文本")` |
+| `h1` - `h5` | 标题（使用 tp-headline） | `(h1 "标题")` |
+| `headline` | 基础标题（可配置高度） | `(headline :height 1.5 "标题")` |
+
+### 标题示例
+
+```elisp
+;; 使用标题组件
+(twidget-parse '(h1 "主标题"))
+(twidget-parse '(h2 "章节标题"))
+(twidget-parse '(h3 "子章节"))
+
+;; 自定义标题高度
+(twidget-parse '(headline :height 2.5 "大标题"))
+```
+
+### 嵌套组件
+
+```elisp
+(twidget-parse
+ '(div
+   (h1 "欢迎")
+   (p "这是一个段落，"
+      (span "包含行内内容")
+      "。")
+   (div
+    (p "div 内的嵌套段落。"))))
+```
+
+---
+
+## 📖 API 参考
+
+### 组件定义
+
+#### `define-twidget`
+
+```elisp
+(define-twidget NAME &rest ARGS)
+```
+
+定义名为 NAME 的文本组件。
+
+| 关键字 | 描述 |
+|--------|------|
+| `:props` | 属性定义：符号（必选）或 `(symbol . default)` |
+| `:slot` | `nil`（无插槽）、`t`（单一插槽）或 `'(name1 name2 ...)` |
+| `:slots` | `:slot` 的别名，用于命名插槽 |
+| `:extends` | 要继承的父组件符号 |
+| `:render` | 简单组件的渲染函数 |
+| `:setup` | 复合组件的设置函数（返回响应式绑定） |
+| `:template` | 复合组件的模板 sexp |
+
+### 组件使用
+
+#### `twidget-parse`
+
+```elisp
+(twidget-parse WIDGET-FORM) -> string
+```
+
+解析并渲染组件。返回带有文本属性的字符串。
+
+```elisp
+(twidget-parse '(widget-name :prop1 val1 :prop2 val2 "插槽内容"))
+```
+
+#### `twidget-insert`
+
+```elisp
+(twidget-insert FORM)
+```
+
+解析并在光标处插入组件的宏。自动捕获 `:for` 指令引用的词法变量。
+
+```elisp
+(let ((items '("甲" "乙" "丙")))
+  (twidget-insert
+   '(div (p :for "item in items" "- {item}"))))
+```
+
+### 实用函数
+
+| 函数 | 签名 | 描述 |
+|------|------|------|
+| `twidget-reset` | `()` | 清除所有组件定义 |
+| `twidget-clear-buffer-state` | `()` | 清除缓冲区本地的响应式状态 |
+| `twidget-ref` | `(value)` | 创建响应式引用 |
+| `twidget-get` | `(sym &optional key)` | 获取响应式值 |
+| `twidget-set` | `(sym value &optional key)` | 设置响应式值 |
+| `twidget-inc` | `(sym num)` | 增加响应式值 |
+| `twidget-dec` | `(sym num)` | 减少响应式值 |
+
+---
+
+## 💡 示例
+
+### 徽章组件
 
 ```elisp
 (define-twidget badge
@@ -486,42 +532,119 @@ Twidget 提供了类似 Vue3 的声明式事件系统，允许在组件模板中
   :slot t
   :render (lambda (props slot)
             (let ((face (pcase (plist-get props :type)
-                          ("info" '(:background "blue" :foreground "white"))
-                          ("success" '(:background "green" :foreground "white"))
-                          ("warning" '(:background "orange" :foreground "black"))
-                          ("error" '(:background "red" :foreground "white"))
-                          (_ '(:background "gray" :foreground "white")))))
-              (tp-set (concat " " slot " ") 'face face))))
+                          ("info" '(:background "#3498db" :foreground "white"))
+                          ("success" '(:background "#2ecc71" :foreground "white"))
+                          ("warning" '(:background "#f39c12" :foreground "black"))
+                          ("error" '(:background "#e74c3c" :foreground "white"))
+                          (_ '(:background "#95a5a6" :foreground "white")))))
+              (tp-set (format " %s " slot) 'face face))))
 
+;; 使用
 (twidget-parse '(badge :type "success" "成功"))
+(twidget-parse '(badge :type "error" "失败"))
+(twidget-parse '(badge :type "warning" "待处理"))
 ```
 
-### 创建布局组件
+### 带循环的列表
 
 ```elisp
-(define-twidget flex-row
-  :slot t
-  :render (lambda (props slot)
-            (concat "[ " slot " ]")))
-
-(twidget-parse
- '(flex-row
-   (badge :type "info" "A")
-   " | "
-   (badge :type "success" "B")
-   " | "
-   (badge :type "error" "C")))
+(let ((fruits '("🍎 苹果" "🍌 香蕉" "🍊 橙子" "🍇 葡萄")))
+  (tp-pop-to-buffer "*fruits*"
+    (twidget-insert
+     '(div
+       (h2 "水果列表")
+       (p :for "fruit in fruits" "• {fruit}")))))
 ```
 
-## 贡献
+### 交互式标签页
+
+```elisp
+(define-twidget tabs
+  :setup (lambda (_props _slot)
+           (list :active (twidget-ref 0)
+                 :tab1 (lambda () (twidget-set 'active 0))
+                 :tab2 (lambda () (twidget-set 'active 1))
+                 :tab3 (lambda () (twidget-set 'active 2))))
+  :template '(div
+              (div
+               (span :on-click "tab1" "[标签 1]")
+               (span " ")
+               (span :on-click "tab2" "[标签 2]")
+               (span " ")
+               (span :on-click "tab3" "[标签 3]"))
+              (p "当前标签：{active}")))
+
+(tp-pop-to-buffer "*tabs-demo*"
+  (twidget-insert '(tabs)))
+```
+
+### 带多个输入的表单
+
+```elisp
+(define-twidget step-input
+  :props '((label . "值") (step . 1))
+  :setup (lambda (props _slot)
+           (let ((step (plist-get props :step)))
+             (list :value (twidget-ref 0)
+                   :label (plist-get props :label)
+                   :stepVal step
+                   :increase (lambda () (twidget-inc 'value step))
+                   :decrease (lambda () (twidget-dec 'value step)))))
+  :template '(div
+              (span "{label}: {value} ")
+              (span :on-click "decrease" "[-]")
+              (span " ")
+              (span :on-click "increase" "[+]")))
+
+(tp-pop-to-buffer "*form-demo*"
+  (twidget-insert
+   '(div
+     (h2 "设置")
+     (step-input :label "音量" :step 5)
+     (step-input :label "亮度" :step 10)
+     (step-input :label "速度" :step 1))))
+```
+
+---
+
+## 🤝 贡献
 
 欢迎贡献！请随时提交问题和拉取请求。
 
-## 许可证
+### 开发设置
+
+```bash
+git clone https://github.com/Kinneyzhang/twidget.git
+cd twidget
+```
+
+### 运行测试
+
+```elisp
+(require 'twidget)
+(twidget-reset)  ; 清除状态以便全新测试
+```
+
+---
+
+## 📄 许可证
 
 本项目采用 GNU 通用公共许可证 v3.0 授权 - 详见 [LICENSE](LICENSE) 文件。
 
-## 致谢
+---
 
-- 灵感来自 Vue.js 和 React 等现代 UI 组件框架
-- 使用 Emacs Lisp 为 Emacs 文本编辑器构建
+## 🙏 致谢
+
+- 灵感来自 [Vue.js](https://vuejs.org/) 和 [React](https://react.dev/) 等现代 UI 组件框架
+- 使用 Emacs Lisp 为 [GNU Emacs](https://www.gnu.org/software/emacs/) 文本编辑器构建
+- 使用 [tp](https://github.com/Kinneyzhang/tp) 增强文本属性处理
+
+---
+
+<div align="center">
+
+**祝你组件构建愉快！🎉**
+
+用 ❤️ 为 Emacs 社区制作
+
+</div>
