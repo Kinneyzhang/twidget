@@ -131,7 +131,7 @@ When the value changes, the UI will be updated automatically."
 
 (defvar-local twidget-reactive-prop-symbols (make-hash-table :test 'equal)
   "Buffer-local hash table for reactive text property symbol tracking.
-Keys are (instance-id . \"__props__\"), values are lists of (sym . value-fn) pairs.")
+Keys are (instance-id . \"__props__\"), values are lists of (sym value-fn prop-name) triples.")
 
 (defun twidget--parse-dot-notation (var-expr)
   "Parse VAR-EXPR with dot notation like \"info.name\", \"items.0\", or \"data.0.name\".
@@ -206,26 +206,46 @@ Returns text with tp.el properties for reactive updates."
     ;; Use tp-set with the tp-text property type and the reactive symbol reference
     (tp-set text 'tp-text (intern (format "$%s" sym)))))
 
-(defun twidget--apply-reactive-prop (text prop-name value-fn instance-id)
-  "Apply reactive text property PROP-NAME to TEXT using VALUE-FN.
-VALUE-FN is a function that returns the property value when called.
+(defun twidget--apply-static-tp-props (text props-plist)
+  "Apply static tp.el text properties from PROPS-PLIST to TEXT.
+PROPS-PLIST is a plist like (face (:background \"red\") tp-button (:palette info)).
+Returns text with properties applied using tp-set for each property."
+  (let ((result text)
+        (props props-plist))
+    (while props
+      (let ((prop-name (car props))
+            (prop-value (cadr props)))
+        (setq result (tp-set result prop-name prop-value))
+        (setq props (cddr props))))
+    result))
+
+(defun twidget--apply-reactive-tp-props (text value-fn instance-id)
+  "Apply reactive tp.el text properties to TEXT using VALUE-FN.
+VALUE-FN is a function that returns a props plist when called.
 INSTANCE-ID is used for reactive tracking.
-Returns text with tp.el properties for reactive updates.
-Uses tp.el's reactive text property mechanism by creating a symbol
-whose value is the computed property value."
-  ;; Create a unique reactive symbol for this property
+Returns text with tp.el properties for reactive updates."
+  ;; For reactive tp-props, we apply each property from the computed plist
+  ;; and track them for updates
   (let* ((prop-id (cl-incf twidget-reactive-prop-counter))
-         (sym (intern (format "twidget--rprop-%d" prop-id)))
-         (initial-value (funcall value-fn)))
-    ;; Set the symbol value to the current value
-    (set sym initial-value)
-    ;; Register this symbol for updates when any reactive var changes
-    (let ((key (cons instance-id "__props__")))
-      (puthash key
-               (cons (cons sym value-fn) (gethash key twidget-reactive-prop-symbols))
-               twidget-reactive-prop-symbols))
-    ;; Use tp-set with the property and the reactive symbol reference
-    (tp-set text prop-name (intern (format "$%s" sym)))))
+         (initial-props (funcall value-fn))
+         (result text))
+    ;; Apply each property reactively
+    (let ((props initial-props))
+      (while props
+        (let* ((prop-name (car props))
+               (prop-value (cadr props))
+               (sym (intern (format "twidget--rprop-%d-%s" prop-id prop-name))))
+          ;; Set the symbol value
+          (set sym prop-value)
+          ;; Register for updates
+          (let ((key (cons instance-id "__props__")))
+            (puthash key
+                     (cons (list sym value-fn prop-name) (gethash key twidget-reactive-prop-symbols))
+                     twidget-reactive-prop-symbols))
+          ;; Apply the property with reactive symbol reference
+          (setq result (tp-set result prop-name (intern (format "$%s" sym))))
+          (setq props (cddr props)))))
+    result))
 
 (defun twidget--update-reactive-prop-symbols (instance-id)
   "Update all reactive property symbols for INSTANCE-ID.
@@ -233,30 +253,34 @@ Called when any reactive variable changes to recompute property values."
   (let* ((key (cons instance-id "__props__"))
          (entries (gethash key twidget-reactive-prop-symbols)))
     (dolist (entry entries)
-      (let ((sym (car entry))
-            (value-fn (cdr entry)))
-        (when (and sym value-fn)
-          ;; Recompute and set the new value
-          (set sym (funcall value-fn)))))))
+      (let* ((sym (car entry))
+             (value-fn (cadr entry))
+             (prop-name (caddr entry)))
+        (when (and sym value-fn prop-name)
+          ;; Recompute the props plist and extract this property's value
+          (let* ((props (funcall value-fn))
+                 (new-value (plist-get props prop-name)))
+            (set sym new-value)))))))
 
-(defun twidget--parse-prop-value (prop-expr reactive-bindings)
-  "Parse PROP-EXPR and return a plist with property info.
-PROP-EXPR can be:
-  - A literal value (symbol, list, string, number)
-  - A string referencing a method: \"getValue()\"
-  - A string referencing a variable: \"varName\"
+(defun twidget--parse-tp-props-value (tp-props-expr reactive-bindings)
+  "Parse TP-PROPS-EXPR and return a plist with tp-props info.
+TP-PROPS-EXPR is a plist of tp.el text properties, e.g.:
+  (tp-button (:palette info))
+  (face (:background \"red\"))
+Or a string referencing a method that returns such a plist:
+  \"getProps()\"
 
 REACTIVE-BINDINGS is the plist from :setup.
 
 Returns a plist with:
-  :value-fn - a function to get the value (for reactive properties)
-  :static-value - the static value (for non-reactive properties)"
+  :value-fn - a function to get the props (for reactive props)
+  :static-value - the static props plist (for non-reactive props)"
   (cond
    ;; String expression - could be method call or variable reference
-   ((stringp prop-expr)
-    (let ((trimmed (string-trim prop-expr)))
+   ((stringp tp-props-expr)
+    (let ((trimmed (string-trim tp-props-expr)))
       (cond
-       ;; Method call: "getValue()" or "getValue(arg)"
+       ;; Method call: "getProps()"
        ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*(\\(.*\\))$" trimmed)
         (let* ((method-name (match-string 1 trimmed))
                (method-key (intern (format ":%s" method-name)))
@@ -264,8 +288,8 @@ Returns a plist with:
           (if (functionp method-fn)
               (list :value-fn method-fn :static-value nil)
             ;; Not a method, treat as literal string
-            (list :value-fn nil :static-value prop-expr))))
-       ;; Variable reference: "varName" (only if it exists in bindings)
+            (list :value-fn nil :static-value tp-props-expr))))
+       ;; Variable reference: "propsVar" (only if it exists in bindings)
        ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
         (let* ((var-name trimmed)
                (var-key (intern (format ":%s" var-name)))
@@ -282,26 +306,14 @@ Returns a plist with:
            (ref-or-val
             (list :value-fn nil :static-value ref-or-val))
            ;; Not found in bindings - treat as literal string
-           (t (list :value-fn nil :static-value prop-expr)))))
+           (t (list :value-fn nil :static-value tp-props-expr)))))
        ;; Other string - treat as literal
-       (t (list :value-fn nil :static-value prop-expr)))))
-   ;; Direct value (symbol, list, number, etc.) - static
-   (t (list :value-fn nil :static-value prop-expr))))
-
-(defconst twidget--tp-props
-  '(:face :tp-text :tp-button :tp-headline :tp-space :tp-link :tp-checkbox :tp-radio)
-  "List of keywords that are recognized as tp.el text properties.
-These properties will be handled specially in templates to support
-reactive updates via tp.el's mechanism.")
-
-(defun twidget--is-tp-prop-p (keyword)
-  "Return non-nil if KEYWORD is a tp.el text property keyword."
-  (memq keyword twidget--tp-props))
-
-(defun twidget--tp-prop-name (keyword)
-  "Convert KEYWORD to the actual property name symbol.
-E.g., :face -> \\='face, :tp-button -> \\='tp-button"
-  (intern (substring (symbol-name keyword) 1)))
+       (t (list :value-fn nil :static-value tp-props-expr)))))
+   ;; Direct plist value - static
+   ((listp tp-props-expr)
+    (list :value-fn nil :static-value tp-props-expr))
+   ;; Other types (numbers, symbols, etc.) - treat as static values
+   (t (list :value-fn nil :static-value tp-props-expr))))
 
 ;;; Widget Definition
 ;; ============================================================================
@@ -792,30 +804,28 @@ REACTIVE-BINDINGS is the original plist from :setup, used for event handlers."
   (let ((widget-name (car template))
         (rest (cdr template)))
     ;; Process the widget arguments to substitute bindings
-    ;; Also extract and process event handlers and face
+    ;; Also extract and process event handlers and tp-props
     (let* ((processed-result (twidget--process-template-args-with-events 
                               rest bindings instance-id reactive-bindings))
            (processed-args (plist-get processed-result :args))
            (event-props (plist-get processed-result :event-props))
-           (tp-props (plist-get processed-result :tp-props))
+           (tp-props-info (plist-get processed-result :tp-props-info))
            (rendered-text (twidget-parse (cons widget-name processed-args) bindings))
            (result-text rendered-text))
       ;; Apply event properties to the rendered text
       (when event-props
         (setq result-text (twidget--apply-event-properties result-text event-props)))
-      ;; Apply tp.el text properties
-      (dolist (prop-entry tp-props)
-        (let* ((prop-name (car prop-entry))
-               (prop-info (cdr prop-entry))
-               (value-fn (plist-get prop-info :value-fn))
-               (static-value (plist-get prop-info :static-value)))
+      ;; Apply tp.el text properties via :tp-props
+      (when tp-props-info
+        (let ((value-fn (plist-get tp-props-info :value-fn))
+              (static-value (plist-get tp-props-info :static-value)))
           (cond
-           ;; Reactive property - use tp.el's reactive mechanism
+           ;; Reactive tp-props - use tp.el's reactive mechanism
            (value-fn
-            (setq result-text (twidget--apply-reactive-prop result-text prop-name value-fn instance-id)))
-           ;; Static property - use tp-set directly
+            (setq result-text (twidget--apply-reactive-tp-props result-text value-fn instance-id)))
+           ;; Static tp-props - apply all properties from the plist
            (static-value
-            (setq result-text (tp-set result-text prop-name static-value))))))
+            (setq result-text (twidget--apply-static-tp-props result-text static-value))))))
       result-text)))
 
 (defun twidget--process-template-args (args bindings instance-id)
@@ -863,12 +873,12 @@ INSTANCE-ID is used for reactive tracking.
 REACTIVE-BINDINGS is the original plist from :setup, used for event handlers.
 
 Returns a plist with:
-  :args - the processed arguments (without event props and tp properties)
+  :args - the processed arguments (without event props and tp-props)
   :event-props - text properties for events (or nil)
-  :tp-props - list of (prop-name . prop-info) for tp.el text properties"
+  :tp-props-info - tp-props info plist with :value-fn and :static-value (or nil)"
   (let ((result nil)
         (event-props nil)
-        (tp-props nil)
+        (tp-props-info nil)
         (has-for nil))
     ;; First pass: check if :for directive is present
     (let ((check-args args))
@@ -894,15 +904,12 @@ Returns a plist with:
                   (when compiled-props
                     (setq event-props (append event-props compiled-props))))
                 (setq args (cdr args)))))
-           ;; Text property (any keyword that could be a tp.el property)
-           ;; Including :face, :tp-text, :tp-button, :tp-headline, etc.
-           ((twidget--is-tp-prop-p arg)
-            (let ((prop-name (twidget--tp-prop-name arg)))
-              (setq args (cdr args))
-              (when args
-                (let ((prop-info (twidget--parse-prop-value (car args) reactive-bindings)))
-                  (push (cons prop-name prop-info) tp-props))
-                (setq args (cdr args)))))
+           ;; tp-props - plist of tp.el text properties
+           ((eq arg :tp-props)
+            (setq args (cdr args))
+            (when args
+              (setq tp-props-info (twidget--parse-tp-props-value (car args) reactive-bindings))
+              (setq args (cdr args))))
            ;; Regular keyword - keep as is
            (t
             (push arg result)
@@ -918,7 +925,7 @@ Returns a plist with:
               (push arg result)
             (push (twidget--process-template-arg arg bindings instance-id reactive-bindings) result))
           (setq args (cdr args))))))
-    (list :args (nreverse result) :event-props event-props :tp-props (nreverse tp-props))))
+    (list :args (nreverse result) :event-props event-props :tp-props-info tp-props-info)))
 
 (defun twidget--process-template-arg (arg bindings instance-id &optional reactive-bindings)
   "Process a single template ARG with BINDINGS.

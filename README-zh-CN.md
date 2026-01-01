@@ -212,13 +212,13 @@ twidget 支持两种定义组件的方式：
            ;; 初始化响应式状态
            (list :active (twidget-ref nil)
                  :buttonLabel (plist-get props :label)
-                 ;; 定义根据状态计算样式的函数
-                 :buttonFace (lambda ()
-                               (if (twidget-get 'active)
-                                   '(:background "green" :foreground "white")
-                                 '(:background "gray" :foreground "black")))))
+                 ;; 定义根据状态计算文本属性的函数
+                 :getProps (lambda ()
+                             (if (twidget-get 'active)
+                                 '(face (:background "green" :foreground "white"))
+                               '(face (:background "gray" :foreground "black"))))))
   :template '(span :on-click "active = !active"
-                   :face "buttonFace()"
+                   :tp-props "getProps()"
                    "[{buttonLabel}: {active}]"))
 
 ;; 使用
@@ -458,7 +458,7 @@ twidget 支持两种定义组件的方式：
 
 ## 🎨 响应式文本属性
 
-twidget 通过 tp.el 的属性系统支持响应式文本属性。`:face`、`:tp-button`、`:tp-headline` 等属性可以绑定到响应式值，当值改变时会自动更新。
+twidget 通过 tp.el 的属性系统支持响应式文本属性，使用 `:tp-props` 属性设置。可以设置多个 tp.el 文本属性，并支持绑定到响应式值。
 
 ### 基本用法
 
@@ -468,12 +468,12 @@ twidget 通过 tp.el 的属性系统支持响应式文本属性。`:face`、`:tp
   :setup (lambda (props _slot)
            (list :active (twidget-ref nil)
                  :buttonLabel (plist-get props :label)
-                 :buttonFace (lambda ()
-                               (if (twidget-get 'active)
-                                   '(:background "green" :foreground "white")
-                                 '(:background "gray" :foreground "black")))))
+                 :getProps (lambda ()
+                             (if (twidget-get 'active)
+                                 '(face (:background "green" :foreground "white"))
+                               '(face (:background "gray" :foreground "black"))))))
   :template '(span :on-click "active = !active"
-                   :face "buttonFace()"
+                   :tp-props "getProps()"
                    "[{buttonLabel}: {active}]"))
 
 (tp-pop-to-buffer "*toggle-demo*"
@@ -482,29 +482,24 @@ twidget 通过 tp.el 的属性系统支持响应式文本属性。`:face`、`:tp
 
 点击按钮可以在绿色和灰色背景之间切换！
 
-### 支持的属性
+### 静态属性
 
-| 属性 | 描述 |
-|------|------|
-| `:face` | 文本样式（前景色、背景色、字体等） |
-| `:tp-text` | 动态文本内容 |
-| `:tp-button` | 带背景色和动作的按钮 |
-| `:tp-headline` | 可变高度的标题 |
-| `:tp-space` | 指定宽度的空格 |
-| `:tp-link` | 可点击链接 |
-| `:tp-checkbox` | 复选框元素 |
-| `:tp-radio` | 单选按钮元素 |
+对于静态属性，直接传递一个 plist：
 
-### 属性值类型
+```elisp
+(span :tp-props (face (:background "blue") tp-button (:palette info))
+      "点击我")
+```
 
-属性支持多种值类型：
+### tp-props 值类型
+
+`:tp-props` 属性支持以下值类型：
 
 | 类型 | 示例 | 说明 |
 |------|------|------|
-| 字面值 | `:face bold` | 静态值 |
-| Plist | `:face '(:background "red")` | 内联定义 |
-| 方法调用 | `:face "getFace()"` | 响应式 - 调用 `:setup` 中的方法 |
-| 变量引用 | `:face "faceVar"` | 引用 `:setup` 中的变量 |
+| Plist | `:tp-props (face bold)` | 静态属性 plist |
+| 方法调用 | `:tp-props "getProps()"` | 响应式 - 调用 `:setup` 中的方法 |
+| 变量引用 | `:tp-props "propsVar"` | 引用 `:setup` 中的变量 |
 
 ---
 
