@@ -212,11 +212,11 @@ twidget 支持两种定义组件的方式：
            ;; 初始化响应式状态
            (list :active (twidget-ref nil)
                  :buttonLabel (plist-get props :label)
-                 ;; 响应式样式函数
+                 ;; 定义根据状态计算样式的函数
                  :buttonFace (lambda ()
                                (if (twidget-get 'active)
-                                   '(:background "green")
-                                 '(:background "gray")))))
+                                   '(:background "green" :foreground "white")
+                                 '(:background "gray" :foreground "black")))))
   :template '(span :on-click "active = !active"
                    :face "buttonFace()"
                    "[{buttonLabel}: {active}]"))
@@ -456,9 +456,9 @@ twidget 支持两种定义组件的方式：
 
 ---
 
-## 🎨 响应式样式 (Reactive Face)
+## 🎨 响应式文本属性
 
-`:face` 属性支持动态样式，当响应式变量改变时会自动更新样式。
+twidget 通过 tp.el 的属性系统支持响应式文本属性。`:face`、`:tp-button`、`:tp-headline` 等属性可以绑定到响应式值，当值改变时会自动更新。
 
 ### 基本用法
 
@@ -482,40 +482,29 @@ twidget 支持两种定义组件的方式：
 
 点击按钮可以在绿色和灰色背景之间切换！
 
-### Face 值类型
+### 支持的属性
 
-`:face` 属性支持多种值类型：
+| 属性 | 描述 |
+|------|------|
+| `:face` | 文本样式（前景色、背景色、字体等） |
+| `:tp-text` | 动态文本内容 |
+| `:tp-button` | 带背景色和动作的按钮 |
+| `:tp-headline` | 可变高度的标题 |
+| `:tp-space` | 指定宽度的空格 |
+| `:tp-link` | 可点击链接 |
+| `:tp-checkbox` | 复选框元素 |
+| `:tp-radio` | 单选按钮元素 |
+
+### 属性值类型
+
+属性支持多种值类型：
 
 | 类型 | 示例 | 说明 |
 |------|------|------|
-| Face 符号 | `:face bold` | 标准 Emacs face |
-| Face plist | `:face '(:background "red")` | 内联 face 定义 |
+| 字面值 | `:face bold` | 静态值 |
+| Plist | `:face '(:background "red")` | 内联定义 |
 | 方法调用 | `:face "getFace()"` | 响应式 - 调用 `:setup` 中的方法 |
-| 变量引用 | `:face "faceVar"` | 响应式 - 引用 `:setup` 中的变量 |
-
-### 基于方法的响应式样式
-
-使用一个方法根据当前状态计算样式：
-
-```elisp
-(define-twidget status-indicator
-  :setup (lambda (_props _slot)
-           (list :status (twidget-ref "ok")
-                 :statusFace (lambda ()
-                               (pcase (twidget-get 'status)
-                                 ("ok" '(:background "green"))
-                                 ("warning" '(:background "yellow"))
-                                 ("error" '(:background "red"))
-                                 (_ '(:background "gray"))))))
-  :template '(div
-              (span :face "statusFace()" "[{status}]")
-              " "
-              (span :on-click "status = 'ok'" "[正常]")
-              " "
-              (span :on-click "status = 'warning'" "[警告]")
-              " "
-              (span :on-click "status = 'error'" "[错误]")))
-```
+| 变量引用 | `:face "faceVar"` | 引用 `:setup` 中的变量 |
 
 ---
 

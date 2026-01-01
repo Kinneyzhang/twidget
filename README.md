@@ -212,11 +212,11 @@ For widgets that compose other widgets with reactive state:
            ;; Initialize reactive state
            (list :active (twidget-ref nil)
                  :buttonLabel (plist-get props :label)
-                 ;; Reactive face function
+                 ;; Define a function to compute the face based on state
                  :buttonFace (lambda ()
                                (if (twidget-get 'active)
-                                   '(:background "green")
-                                 '(:background "gray")))))
+                                   '(:background "green" :foreground "white")
+                                 '(:background "gray" :foreground "black")))))
   :template '(span :on-click "active = !active"
                    :face "buttonFace()"
                    "[{buttonLabel}: {active}]"))
@@ -456,9 +456,9 @@ For more details, see [Event System Documentation](docs/event-system.md).
 
 ---
 
-## 🎨 Reactive Face
+## 🎨 Reactive Text Properties
 
-The `:face` property enables dynamic styling that updates when reactive variables change.
+twidget supports reactive text properties through tp.el's property system. Properties like `:face`, `:tp-button`, `:tp-headline`, etc. can be bound to reactive values that update automatically.
 
 ### Basic Usage
 
@@ -482,39 +482,29 @@ The `:face` property enables dynamic styling that updates when reactive variable
 
 Click the button to toggle between green and gray backgrounds!
 
-### Face Value Types
+### Supported Properties
 
-The `:face` property accepts several value types:
+| Property | Description |
+|----------|-------------|
+| `:face` | Text face (foreground, background, font, etc.) |
+| `:tp-text` | Dynamic text content |
+| `:tp-button` | Button with bgcolor and action |
+| `:tp-headline` | Headline with variable height |
+| `:tp-space` | Space with specific width |
+| `:tp-link` | Clickable link |
+| `:tp-checkbox` | Checkbox element |
+| `:tp-radio` | Radio button element |
+
+### Property Value Types
+
+Properties accept several value types:
 
 | Type | Example | Description |
 |------|---------|-------------|
-| Face symbol | `:face bold` | Standard Emacs face |
-| Face plist | `:face '(:background "red")` | Inline face specification |
+| Literal | `:face bold` | Static value |
+| Plist | `:face '(:background "red")` | Inline specification |
 | Method call | `:face "getFace()"` | Reactive - calls function from `:setup` |
-| Variable ref | `:face "faceVar"` | Reactive - references variable from `:setup` |
-
-### Method-based Reactive Face
-
-Use a method that computes the face based on current state:
-
-```elisp
-(define-twidget status-indicator
-  :setup (lambda (_props _slot)
-           (list :status (twidget-ref "ok")
-                 :statusFace (lambda ()
-                               (pcase (twidget-get 'status)
-                                 ("ok" '(:background "green"))
-                                 ("warning" '(:background "yellow"))
-                                 ("error" '(:background "red"))
-                                 (_ '(:background "gray"))))))
-  :template '(div
-              (span :face "statusFace()" "[{status}]")
-              " "
-              (span :on-click "status = 'ok'" "[OK]")
-              " "
-              (span :on-click "status = 'warning'" "[Warn]")
-              " "
-              (span :on-click "status = 'error'" "[Error]")))
+| Variable ref | `:face "faceVar"` | References variable from `:setup` |
 
 ---
 
