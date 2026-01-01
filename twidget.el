@@ -228,7 +228,10 @@ REACTIVE-BINDINGS is the plist from :setup.
 Returns a plist with:
   :face - the initial face value
   :face-fn - a function to get the face (or nil if static)
-  :deps - list of variable names this depends on (or nil if static)"
+  :deps - dependency info:
+          nil - static face, no dependencies
+          t - depends on all reactive variables (used for method calls)
+          (list of strings) - specific variable names this depends on"
   (cond
    ;; Direct face spec (symbol or list)
    ((or (symbolp face-expr) (and (listp face-expr) (not (stringp face-expr))))
@@ -283,18 +286,23 @@ DEPS is a list of variable names this face depends on, or t for all."
 
 (defun twidget--update-reactive-faces (var-name)
   "Update all reactive faces that depend on VAR-NAME.
-Called when a reactive variable changes."
+Called when a reactive variable changes.
+VAR-NAME is a string representing the variable name.
+Faces with deps=t depend on all variables and will always be updated."
   (dolist (entry twidget-reactive-faces)
     (let ((deps (plist-get entry :deps))
           (face-fn (plist-get entry :face-fn))
           (start (plist-get entry :marker-start))
           (end (plist-get entry :marker-end)))
       ;; Check if this face depends on the changed variable
+      ;; deps is either:
+      ;;   - t: depends on all reactive variables
+      ;;   - a list of strings: specific variable names
       (when (and face-fn
                  (marker-buffer start)  ; markers still valid
                  (marker-buffer end)
-                 (or (eq deps t)  ; depends on all
-                     (member var-name deps)))
+                 (or (eq deps t)  ; t means depends on all
+                     (and (listp deps) (member var-name deps))))
         ;; Update the face
         (let ((new-face (funcall face-fn)))
           (with-current-buffer (marker-buffer start)
@@ -1057,7 +1065,7 @@ Example:
 
 (defun twidget--insert-with-reactive-faces (text)
   "Insert TEXT and register any reactive face regions.
-Scans TEXT for twidget-reactive-face-id properties and registers
+Scans TEXT for twidget-reactive-face-fn properties and registers
 them for reactive updates."
   (let ((start (point)))
     (insert text)
@@ -1066,20 +1074,20 @@ them for reactive updates."
       (save-excursion
         (goto-char start)
         (while (< (point) end)
-          (let ((face-fn (get-text-property (point) 'twidget-reactive-face-fn))
-                (instance-id (get-text-property (point) 'twidget-reactive-face-instance))
-                (deps (get-text-property (point) 'twidget-reactive-face-deps)))
-            (when face-fn
-              ;; Find the extent of this reactive face region
-              (let ((region-start (point))
-                    (region-end (next-single-property-change
-                                 (point) 'twidget-reactive-face-fn nil end)))
-                (setq region-end (or region-end end))
-                ;; Register the reactive face
-                (twidget--register-reactive-face region-start region-end
-                                                  face-fn instance-id deps)
-                (goto-char region-end)))
-            (unless face-fn
+          (let ((face-fn (get-text-property (point) 'twidget-reactive-face-fn)))
+            (if face-fn
+                ;; Found a reactive face region - get all properties at once
+                (let ((region-start (point))
+                      (instance-id (get-text-property (point) 'twidget-reactive-face-instance))
+                      (deps (get-text-property (point) 'twidget-reactive-face-deps))
+                      (region-end (or (next-single-property-change
+                                       (point) 'twidget-reactive-face-fn nil end)
+                                      end)))
+                  ;; Register the reactive face
+                  (twidget--register-reactive-face region-start region-end
+                                                   face-fn instance-id deps)
+                  (goto-char region-end))
+              ;; No reactive face at this position, skip to next change
               (goto-char (or (next-single-property-change
                               (point) 'twidget-reactive-face-fn nil end)
                              end)))))))))
