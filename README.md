@@ -37,14 +37,45 @@ English | [中文](README-zh-CN.md)
 
 ## 🌟 Overview
 
-**twidget** (Text Widget) provides a powerful and flexible way to define reusable text widgets in Emacs. It brings modern frontend development patterns to Emacs, allowing you to build complex, interactive text-based UIs with a declarative syntax similar to Vue.js and React.
+**twidget** (Text Widget) is a declarative text widget library for Emacs that revolutionizes how you build text-based user interfaces. Inspired by modern frontend frameworks like Vue.js and React, twidget brings component-based UI development to Emacs buffers.
+
+### Core Capabilities
+
+twidget enables you to:
+
+- **Define Reusable Components**: Create self-contained text widgets with their own properties, slots, and rendering logic that can be reused across your Emacs applications
+- **Build Reactive Interfaces**: Use `twidget-ref` to create reactive data bindings that automatically update the UI when data changes—no manual refresh needed
+- **Handle User Interactions**: Bind click events and other interactions using Vue3-like `:on-click` syntax with support for inline expressions (`count++`, `flag=!flag`)
+- **Compose Complex UIs**: Nest widgets within widgets, use named slots for flexible content injection, and extend existing widgets through inheritance
+- **Iterate Over Data**: Use the `:for` directive to dynamically render lists of items from collections
+
+### How It Works
+
+```elisp
+;; 1. Define a widget with reactive state
+(define-twidget counter
+  :setup (lambda (_props _slot)
+           (list :count (twidget-ref 0)))           ; Reactive state
+  :template '(div
+              (span "Count: {count} ")               ; Data binding
+              (span :on-click "count++" "[+]")))     ; Event handling
+
+;; 2. Render the widget in a buffer
+(tp-pop-to-buffer "*demo*"
+  (twidget-insert '(counter)))
+
+;; 3. Click [+] to increment—UI updates automatically!
+```
 
 ### Why twidget?
 
-- **Declarative**: Define *what* your widget looks like, not *how* to render it
-- **Composable**: Build complex UIs by combining simple widgets
-- **Reactive**: UI updates automatically when data changes
-- **Familiar**: If you know Vue.js or React, you'll feel right at home
+| Benefit | Description |
+|---------|-------------|
+| 🎯 **Declarative** | Define *what* your widget looks like, not *how* to render it step-by-step |
+| 🧩 **Composable** | Build complex UIs by combining simple, focused widgets |
+| ⚡ **Reactive** | UI updates automatically when underlying data changes |
+| 🔄 **Familiar** | If you know Vue.js or React, the patterns will feel natural |
+| 📝 **Text-Native** | Designed specifically for Emacs text buffers with full text property support |
 
 ---
 
