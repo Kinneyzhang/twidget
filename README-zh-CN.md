@@ -14,6 +14,7 @@
 - **文本属性** - 与 Emacs 文本属性无缝集成
 - **响应式数据** - 使用 `twidget-ref` 创建响应式 UI，自动更新
 - **复合组件** - 使用 `:setup` 和 `:template` 构建复杂组件
+- **事件系统** - 类似 Vue3 的声明式事件绑定，支持 `:on-click` 和内联表达式
 
 ## 安装
 
@@ -325,6 +326,155 @@
 ```
 
 将响应式变量 SYM 中存储的数值减少 NUM。
+
+## 事件系统
+
+Twidget 提供了类似 Vue3 的声明式事件系统，允许在组件模板中通过 `:on-*` 语法直接绑定事件处理器。
+
+### 基本事件绑定
+
+```elisp
+;; 简单点击处理器
+(define-twidget my-button
+  :slot t
+  :setup (lambda (_props slot)
+           (list :label (twidget-ref slot)
+                 :handleClick (lambda ()
+                                (message "按钮被点击了！"))))
+  :template '(span :on-click "handleClick" "{label}"))
+
+(twidget-parse '(my-button "点击我"))
+```
+
+### 支持的表达式格式
+
+| 格式 | 示例 | 说明 |
+|------|------|------|
+| 方法引用 | `"doSomething"` | 调用 `:setup` 中定义的方法 |
+| 带参数方法调用 | `"doSomething(foo, 'bar')"` | 带参数调用方法 |
+| 递增 | `"count++"` | 递增响应式变量 |
+| 递减 | `"count--"` | 递减响应式变量 |
+| 赋值 | `"count=10"` | 给变量赋值 |
+| 取反 | `"flag=!flag"` | 切换布尔值 |
+| 多语句 | `"a++ ; b++"` | 执行多个语句 |
+| 三元表达式 | `"flag ? doA() : doB()"` | 条件执行 |
+| 逻辑与 | `"enabled && doAction()"` | 条件为真时执行 |
+| 逻辑或 | `"!enabled \|\| showWarning()"` | 条件为假时执行 |
+
+### 事件系统示例
+
+#### 计数器（递增/递减）
+
+```elisp
+(define-twidget counter
+  :setup (lambda (_props _slot)
+           (list :count (twidget-ref 0)))
+  :template '(div
+              (span "{count}")
+              " "
+              (span :on-click "count++" "[+]")
+              " "
+              (span :on-click "count--" "[-]")
+              " "
+              (span :on-click "count=0" "[重置]")))
+
+(tp-pop-to-buffer "*counter-demo*"
+  (twidget-insert '(counter)))
+```
+
+#### 开关切换
+
+```elisp
+(define-twidget toggle-switch
+  :setup (lambda (_props _slot)
+           (list :on (twidget-ref nil)
+                 :notify (lambda ()
+                           (message (if (twidget-get 'on) "开启！" "关闭！")))))
+  :template '(div
+              (span :on-click "on = !on ; notify()" "[切换: {on}]")))
+
+(tp-pop-to-buffer "*toggle-demo*"
+  (twidget-insert '(toggle-switch)))
+```
+
+#### 双计数器（多语句）
+
+```elisp
+(define-twidget dual-counter
+  :setup (lambda (_props _slot)
+           (list :a (twidget-ref 0)
+                 :b (twidget-ref 0)))
+  :template '(div
+              (span "A: {a}, B: {b}")
+              " "
+              (span :on-click "a++;b++" "[同时+1]")))
+
+(tp-pop-to-buffer "*dual-counter-demo*"
+  (twidget-insert '(dual-counter)))
+```
+
+#### 条件执行
+
+```elisp
+(define-twidget conditional-action
+  :setup (lambda (_props _slot)
+           (list :enabled (twidget-ref t)
+                 :doAction (lambda () (message "动作已执行！"))
+                 :toggleEnabled (lambda ()
+                                  (twidget-set 'enabled (not (twidget-get 'enabled))))))
+  :template '(div
+              (span :on-click "toggleEnabled" "[{enabled}]")
+              " "
+              (span :on-click "enabled && doAction()" "[启用时执行]")))
+
+(tp-pop-to-buffer "*conditional-demo*"
+  (twidget-insert '(conditional-action)))
+```
+
+#### 三元表达式
+
+```elisp
+(define-twidget ternary-demo
+  :setup (lambda (_props _slot)
+           (list :flag (twidget-ref t)
+                 :showOn (lambda () (message "开启状态！"))
+                 :showOff (lambda () (message "关闭状态！"))
+                 :toggle (lambda ()
+                           (twidget-set 'flag (not (twidget-get 'flag))))))
+  :template '(div
+              (span :on-click "toggle" "[切换]")
+              " "
+              (span :on-click "flag ? showOn() : showOff()" "[显示状态]")))
+
+(tp-pop-to-buffer "*ternary-demo*"
+  (twidget-insert '(ternary-demo)))
+```
+
+### 事件处理器参数类型
+
+事件处理器支持多种参数类型：
+
+| 类型 | 示例 | 说明 |
+|------|------|------|
+| 字符串 | `"greet('hello')"` | 单引号或双引号 |
+| 数字 | `"setCount(42)"` | 整数或浮点数 |
+| 布尔值 | `"setFlag(true)"` | `true`、`false` 或 `nil` |
+| 变量 | `"greet(name)"` | 引用 setup 中的变量 |
+
+### 比较运算符
+
+条件表达式支持以下运算符：
+
+| 运算符 | 示例 | 说明 |
+|--------|------|------|
+| `===` | `count === 0` | 严格相等 |
+| `==` | `count == 0` | 相等 |
+| `!=` | `count != 0` | 不相等 |
+| `>` | `count > 10` | 大于 |
+| `<` | `count < 10` | 小于 |
+| `!` | `!flag` | 逻辑非 |
+
+更多详情请参阅 [事件系统文档](docs/event-system.md)。
 
 ## 示例
 

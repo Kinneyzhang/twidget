@@ -14,6 +14,7 @@ English | [中文](README-zh-CN.md)
 - **Text Properties** - Seamless integration with Emacs text properties
 - **Reactive Data** - Create reactive UIs with automatic updates using `twidget-ref`
 - **Composite Widgets** - Build complex widgets using `:setup` and `:template`
+- **Event System** - Vue3-like declarative event binding with `:on-click` and inline expressions
 
 ## Installation
 
@@ -325,6 +326,155 @@ Increment the numeric value stored in reactive variable SYM by NUM.
 ```
 
 Decrement the numeric value stored in reactive variable SYM by NUM.
+
+## Event System
+
+Twidget provides a Vue3-like declarative event system that allows binding event handlers directly in component templates using `:on-*` syntax.
+
+### Basic Event Binding
+
+```elisp
+;; Simple click handler
+(define-twidget my-button
+  :slot t
+  :setup (lambda (_props slot)
+           (list :label (twidget-ref slot)
+                 :handleClick (lambda ()
+                                (message "Button clicked!"))))
+  :template '(span :on-click "handleClick" "{label}"))
+
+(twidget-parse '(my-button "Click Me"))
+```
+
+### Supported Expression Formats
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| Method reference | `"doSomething"` | Call a method from `:setup` |
+| Method with args | `"doSomething(foo, 'bar')"` | Call method with arguments |
+| Increment | `"count++"` | Increment reactive variable |
+| Decrement | `"count--"` | Decrement reactive variable |
+| Assignment | `"count=10"` | Assign value to variable |
+| Negation | `"flag=!flag"` | Toggle boolean value |
+| Multi-statement | `"a++ ; b++"` | Execute multiple statements |
+| Ternary | `"flag ? doA() : doB()"` | Conditional execution |
+| Logical AND | `"enabled && doAction()"` | Execute if condition is truthy |
+| Logical OR | `"!enabled \|\| showWarning()"` | Execute if condition is falsy |
+
+### Event System Examples
+
+#### Counter with Increment/Decrement
+
+```elisp
+(define-twidget counter
+  :setup (lambda (_props _slot)
+           (list :count (twidget-ref 0)))
+  :template '(div
+              (span "{count}")
+              " "
+              (span :on-click "count++" "[+]")
+              " "
+              (span :on-click "count--" "[-]")
+              " "
+              (span :on-click "count=0" "[Reset]")))
+
+(tp-pop-to-buffer "*counter-demo*"
+  (twidget-insert '(counter)))
+```
+
+#### Toggle Switch
+
+```elisp
+(define-twidget toggle-switch
+  :setup (lambda (_props _slot)
+           (list :on (twidget-ref nil)
+                 :notify (lambda ()
+                           (message (if (twidget-get 'on) "ON!" "OFF!")))))
+  :template '(div
+              (span :on-click "on = !on ; notify()" "[Toggle: {on}]")))
+
+(tp-pop-to-buffer "*toggle-demo*"
+  (twidget-insert '(toggle-switch)))
+```
+
+#### Dual Counter (Multi-statement)
+
+```elisp
+(define-twidget dual-counter
+  :setup (lambda (_props _slot)
+           (list :a (twidget-ref 0)
+                 :b (twidget-ref 0)))
+  :template '(div
+              (span "A: {a}, B: {b}")
+              " "
+              (span :on-click "a++;b++" "[Both +1]")))
+
+(tp-pop-to-buffer "*dual-counter-demo*"
+  (twidget-insert '(dual-counter)))
+```
+
+#### Conditional Execution
+
+```elisp
+(define-twidget conditional-action
+  :setup (lambda (_props _slot)
+           (list :enabled (twidget-ref t)
+                 :doAction (lambda () (message "Action executed!"))
+                 :toggleEnabled (lambda ()
+                                  (twidget-set 'enabled (not (twidget-get 'enabled))))))
+  :template '(div
+              (span :on-click "toggleEnabled" "[{enabled}]")
+              " "
+              (span :on-click "enabled && doAction()" "[Do if enabled]")))
+
+(tp-pop-to-buffer "*conditional-demo*"
+  (twidget-insert '(conditional-action)))
+```
+
+#### Ternary Expression
+
+```elisp
+(define-twidget ternary-demo
+  :setup (lambda (_props _slot)
+           (list :flag (twidget-ref t)
+                 :showOn (lambda () (message "ON!"))
+                 :showOff (lambda () (message "OFF!"))
+                 :toggle (lambda ()
+                           (twidget-set 'flag (not (twidget-get 'flag))))))
+  :template '(div
+              (span :on-click "toggle" "[Toggle]")
+              " "
+              (span :on-click "flag ? showOn() : showOff()" "[Show State]")))
+
+(tp-pop-to-buffer "*ternary-demo*"
+  (twidget-insert '(ternary-demo)))
+```
+
+### Event Handler Arguments
+
+Event handlers support various argument types:
+
+| Type | Example | Description |
+|------|---------|-------------|
+| String | `"greet('hello')"` | Single or double quotes |
+| Number | `"setCount(42)"` | Integer or float |
+| Boolean | `"setFlag(true)"` | `true`, `false`, or `nil` |
+| Variable | `"greet(name)"` | Reference to setup variable |
+
+### Comparison Operators
+
+Condition expressions support these operators:
+
+| Operator | Example | Description |
+|----------|---------|-------------|
+| `===` | `count === 0` | Strict equality |
+| `==` | `count == 0` | Equality |
+| `!=` | `count != 0` | Not equal |
+| `>` | `count > 10` | Greater than |
+| `<` | `count < 10` | Less than |
+| `!` | `!flag` | Logical NOT |
+
+For more details, see [Event System Documentation](docs/event-system.md).
 
 ## Examples
 

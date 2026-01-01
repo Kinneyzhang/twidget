@@ -6,12 +6,62 @@
 
 Twidget 事件系统是一个类似 Vue3 的声明式事件处理系统，允许在组件模板中通过 `:on-*` 语法绑定事件处理器。该系统支持多种语法格式，包括方法引用、带参数的方法调用、以及各种内联表达式。
 
-## 设计原则
+## 特性
 
-1. **声明式语法** - 事件处理器直接在模板中以字符串形式声明
-2. **与 setup 集成** - 事件处理器可以访问 `:setup` 中定义的方法和响应式变量
-3. **通用可扩展** - 事件系统设计为可扩展的，方便添加更多事件类型
-4. **安全性** - 表达式在受控环境中执行
+- **声明式语法** - 事件处理器直接在模板中以字符串形式声明
+- **与 setup 集成** - 事件处理器可以访问 `:setup` 中定义的方法和响应式变量
+- **预编译优化** - 所有事件处理器在组件渲染时预编译，确保点击响应性能
+- **通用可扩展** - 事件系统设计为可扩展的，方便添加更多事件类型
+- **安全性** - 表达式在受控环境中执行
+
+## 快速开始
+
+### 基本点击事件
+
+```elisp
+(define-twidget click-demo
+  :setup (lambda (_props _slot)
+           (list :handleClick (lambda ()
+                                (message "点击了！"))))
+  :template '(span :on-click "handleClick" "[点击我]"))
+
+(tp-pop-to-buffer "*click-demo*"
+  (twidget-insert '(click-demo)))
+```
+
+### 计数器示例
+
+```elisp
+(define-twidget counter
+  :setup (lambda (_props _slot)
+           (list :count (twidget-ref 0)))
+  :template '(div
+              (span "{count}")
+              " "
+              (span :on-click "count++" "[+]")
+              " "
+              (span :on-click "count--" "[-]")
+              " "
+              (span :on-click "count=0" "[重置]")))
+
+(tp-pop-to-buffer "*counter-demo*"
+  (twidget-insert '(counter)))
+```
+
+### 开关切换示例
+
+```elisp
+(define-twidget toggle-switch
+  :setup (lambda (_props _slot)
+           (list :on (twidget-ref nil)
+                 :notify (lambda ()
+                           (message (if (twidget-get 'on) "开启！" "关闭！")))))
+  :template '(div
+              (span :on-click "on = !on ; notify()" "[切换: {on}]")))
+
+(tp-pop-to-buffer "*toggle-demo*"
+  (twidget-insert '(toggle-switch)))
+```
 
 ## 架构设计
 
@@ -256,6 +306,17 @@ Twidget 事件系统是一个类似 Vue3 的声明式事件处理系统，允许
 | `<` | `count < 10` | 小于 |
 | `!` | `!flag` | 取反 |
 
+## 性能优化
+
+事件系统采用预编译策略以获得最佳性能：
+
+- **单语句** - 在渲染时一次性编译
+- **多语句** - 所有子处理器预编译成列表
+- **三元表达式** - 两个分支都预编译
+- **逻辑与/或** - 动作处理器预编译
+
+这意味着点击按钮时直接执行预编译的 lambda，无需任何运行时解析或编译开销。
+
 ## 扩展事件类型
 
 要添加新的事件类型，修改 `twidget-event-types` 并更新 `twidget--process-event-prop`：
@@ -355,47 +416,64 @@ English | [中文](#twidget-事件系统设计文档)
 
 The Twidget event system is a Vue3-like declarative event handling system that allows binding event handlers in component templates using `:on-*` syntax. The system supports multiple syntax formats including method references, method calls with arguments, and various inline expressions.
 
-## Design Principles
+## Features
 
-1. **Declarative Syntax** - Event handlers are declared directly in templates as strings
-2. **Setup Integration** - Event handlers can access methods and reactive variables defined in `:setup`
-3. **Extensible Design** - The event system is designed to be extensible for adding more event types
-4. **Safety** - Expressions are executed in a controlled environment
+- **Declarative Syntax** - Event handlers are declared directly in templates as strings
+- **Setup Integration** - Event handlers can access methods and reactive variables defined in `:setup`
+- **Pre-compilation** - All event handlers are pre-compiled at render time for optimal click response performance
+- **Extensible Design** - The event system is designed to be extensible for adding more event types
+- **Safety** - Expressions are executed in a controlled environment
 
-## Usage Guide
+## Quick Start
 
-### Basic Usage
-
-#### 1. Method Reference
-
-Define methods in `:setup`, reference them in templates:
+### Basic Click Event
 
 ```elisp
-(define-twidget my-button
-  :slot t
-  :setup (lambda (_props slot)
-           (list :label (twidget-ref slot)
-                 :handleClick (lambda ()
-                                (message "Button clicked!"))))
-  :template '(span :on-click "handleClick" "{label}"))
+(define-twidget click-demo
+  :setup (lambda (_props _slot)
+           (list :handleClick (lambda ()
+                                (message "Clicked!"))))
+  :template '(span :on-click "handleClick" "[Click Me]"))
+
+(tp-pop-to-buffer "*click-demo*"
+  (twidget-insert '(click-demo)))
 ```
 
-#### 2. Inline Expressions
+### Counter Example
 
 ```elisp
 (define-twidget counter
-  :slot t
-  :setup (lambda (_props slot)
+  :setup (lambda (_props _slot)
            (list :count (twidget-ref 0)))
   :template '(div
               (span "{count}")
               " "
-              (span :on-click "count++" "[+1]")
+              (span :on-click "count++" "[+]")
               " "
-              (span :on-click "count--" "[-1]")))
+              (span :on-click "count--" "[-]")
+              " "
+              (span :on-click "count=0" "[Reset]")))
+
+(tp-pop-to-buffer "*counter-demo*"
+  (twidget-insert '(counter)))
 ```
 
-### Supported Expression Types
+### Toggle Switch Example
+
+```elisp
+(define-twidget toggle-switch
+  :setup (lambda (_props _slot)
+           (list :on (twidget-ref nil)
+                 :notify (lambda ()
+                           (message (if (twidget-get 'on) "ON!" "OFF!")))))
+  :template '(div
+              (span :on-click "on = !on ; notify()" "[Toggle: {on}]")))
+
+(tp-pop-to-buffer "*toggle-demo*"
+  (twidget-insert '(toggle-switch)))
+```
+
+## Supported Expression Types
 
 | Type | Example | Description |
 |------|---------|-------------|
@@ -404,10 +482,60 @@ Define methods in `:setup`, reference them in templates:
 | Increment | `"count++"` | Increment variable |
 | Decrement | `"count--"` | Decrement variable |
 | Assignment | `"count=10"` | Assign value |
+| Negation | `"flag=!flag"` | Toggle boolean |
 | Ternary | `"flag ? a() : b()"` | Conditional |
 | Logical AND | `"show && action()"` | Execute if truthy |
 | Logical OR | `"show \|\| action()"` | Execute if falsy |
 | Multi-statement | `"a++ ; b++"` | Multiple statements |
+
+## Complete Examples
+
+### Dual Counter (Multi-statement)
+
+```elisp
+(define-twidget dual-counter
+  :setup (lambda (_props _slot)
+           (list :a (twidget-ref 0)
+                 :b (twidget-ref 0)))
+  :template '(div
+              (span "A: {a}, B: {b}")
+              " "
+              (span :on-click "a++;b++" "[Both +1]")))
+
+(tp-pop-to-buffer "*dual-counter*"
+  (twidget-insert '(dual-counter)))
+```
+
+### Conditional Execution
+
+```elisp
+(define-twidget conditional-action
+  :setup (lambda (_props _slot)
+           (list :enabled (twidget-ref t)
+                 :doAction (lambda () (message "Action executed!"))
+                 :toggleEnabled (lambda ()
+                                  (twidget-set 'enabled (not (twidget-get 'enabled))))))
+  :template '(div
+              (span :on-click "toggleEnabled" "[{enabled}]")
+              " "
+              (span :on-click "enabled && doAction()" "[Do if enabled]")))
+```
+
+### Ternary Expression
+
+```elisp
+(define-twidget ternary-demo
+  :setup (lambda (_props _slot)
+           (list :flag (twidget-ref t)
+                 :showOn (lambda () (message "ON!"))
+                 :showOff (lambda () (message "OFF!"))
+                 :toggle (lambda ()
+                           (twidget-set 'flag (not (twidget-get 'flag))))))
+  :template '(div
+              (span :on-click "toggle" "[Toggle]")
+              " "
+              (span :on-click "flag ? showOn() : showOff()" "[Show State]")))
+```
 
 ## Extending Event Types
 
@@ -419,6 +547,17 @@ To add new event types, modify `twidget-event-types` and update `twidget--proces
                         :doc "Double click event"))
       twidget-event-types)
 ```
+
+## Performance
+
+The event system uses pre-compilation for optimal performance:
+
+- **Single statements** - Compiled once at render time
+- **Multi-statement** - All sub-handlers pre-compiled into a list
+- **Ternary expressions** - Both branches pre-compiled
+- **Logical AND/OR** - Action handlers pre-compiled
+
+This means clicking a button executes pre-compiled lambdas directly without any runtime parsing or compilation overhead.
 
 ## API Reference
 
