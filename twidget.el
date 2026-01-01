@@ -613,14 +613,15 @@ SLOT is the slot value (if any)."
     (puthash instance-id
              (list :bindings reactive-bindings :template template)
              twidget-instances)
-    ;; Expand and render the template
-    (twidget--expand-template template bindings instance-id)))
+    ;; Expand and render the template with reactive-bindings for event handling
+    (twidget--expand-template template bindings instance-id reactive-bindings)))
 
-(defun twidget--expand-template (template bindings instance-id)
+(defun twidget--expand-template (template bindings instance-id &optional reactive-bindings)
   "Expand TEMPLATE sexp into rendered string.
 TEMPLATE is a widget form or list of forms.
 BINDINGS is an alist of (VAR-NAME . VALUE) for placeholder substitution.
-INSTANCE-ID is the widget instance identifier for reactivity."
+INSTANCE-ID is the widget instance identifier for reactivity.
+REACTIVE-BINDINGS is the original plist from :setup, used for event handlers."
   (cond
    ;; String - substitute placeholders and wrap with reactive overlay if needed
    ((stringp template)
@@ -629,11 +630,11 @@ INSTANCE-ID is the widget instance identifier for reactivity."
    ((and (listp template)
          (symbolp (car template))
          (assoc (car template) twidget-alist))
-    (twidget--expand-template-widget template bindings instance-id))
+    (twidget--expand-template-widget template bindings instance-id reactive-bindings))
    ;; List of forms - process each
    ((listp template)
     (mapconcat (lambda (form)
-                 (twidget--expand-template form bindings instance-id))
+                 (twidget--expand-template form bindings instance-id reactive-bindings))
                template ""))
    ;; Other - convert to string
    (t (format "%s" template))))
@@ -680,14 +681,23 @@ Supports dot notation for nested access:
     ;; Add the remaining part after the last match
     (concat result (substring str start))))
 
-(defun twidget--expand-template-widget (template bindings instance-id)
+(defun twidget--expand-template-widget (template bindings instance-id &optional reactive-bindings)
   "Expand widget TEMPLATE with BINDINGS.
-INSTANCE-ID is used for reactive tracking."
+INSTANCE-ID is used for reactive tracking.
+REACTIVE-BINDINGS is the original plist from :setup, used for event handlers."
   (let ((widget-name (car template))
         (rest (cdr template)))
     ;; Process the widget arguments to substitute bindings
-    (let ((processed-args (twidget--process-template-args rest bindings instance-id)))
-      (twidget-parse (cons widget-name processed-args) bindings))))
+    ;; Also extract and process event handlers
+    (let* ((processed-result (twidget--process-template-args-with-events 
+                              rest bindings instance-id reactive-bindings))
+           (processed-args (plist-get processed-result :args))
+           (event-props (plist-get processed-result :event-props))
+           (rendered-text (twidget-parse (cons widget-name processed-args) bindings)))
+      ;; Apply event properties to the rendered text
+      (if event-props
+          (twidget--apply-event-properties rendered-text event-props)
+        rendered-text))))
 
 (defun twidget--process-template-args (args bindings instance-id)
   "Process template ARGS, substituting BINDINGS.
@@ -726,6 +736,58 @@ here because they contain placeholders that will be bound during :for iteration.
             (push (twidget--process-template-arg arg bindings instance-id) result))
           (setq args (cdr args))))))
     (nreverse result)))
+
+(defun twidget--process-template-args-with-events (args bindings instance-id reactive-bindings)
+  "Process template ARGS with event handling support.
+BINDINGS is an alist of (VAR-NAME . VALUE) for placeholder substitution.
+INSTANCE-ID is used for reactive tracking.
+REACTIVE-BINDINGS is the original plist from :setup, used for event handlers.
+
+Returns a plist with:
+  :args - the processed arguments (without event props)
+  :event-props - text properties for events (or nil)"
+  (let ((result nil)
+        (event-props nil)
+        (has-for nil))
+    ;; First pass: check if :for directive is present
+    (let ((check-args args))
+      (while (and check-args (keywordp (car check-args)))
+        (when (eq (car check-args) :for)
+          (setq has-for t))
+        (setq check-args (cddr check-args))))
+    ;; Second pass: process arguments and extract events
+    (while args
+      (let ((arg (car args)))
+        (cond
+         ;; Keyword argument
+         ((keywordp arg)
+          (let ((event-type (twidget--is-event-prop-p arg)))
+            (if event-type
+                ;; This is an event property - extract and compile
+                (progn
+                  (setq args (cdr args))
+                  (when args
+                    (let* ((handler-expr (car args))
+                           (compiled-props (twidget--process-event-prop 
+                                            event-type handler-expr reactive-bindings)))
+                      (when compiled-props
+                        (setq event-props (append event-props compiled-props))))
+                    (setq args (cdr args))))
+              ;; Regular keyword - keep as is
+              (push arg result)
+              (setq args (cdr args))
+              (when args
+                (if (eq arg :for)
+                    (push (car args) result)
+                  (push (twidget--process-template-arg (car args) bindings instance-id) result))
+                (setq args (cdr args))))))
+         ;; Non-keyword (slot) arguments
+         (t
+          (if has-for
+              (push arg result)
+            (push (twidget--process-template-arg arg bindings instance-id) result))
+          (setq args (cdr args))))))
+    (list :args (nreverse result) :event-props event-props)))
 
 (defun twidget--process-template-arg (arg bindings instance-id)
   "Process a single template ARG with BINDINGS.
@@ -1067,6 +1129,521 @@ Returns the twidget-ref object."
       ;; Not found, create a new one if initial value provided
       (when initial-value
         (twidget-ref initial-value)))))
+
+;;; Event System
+;; ============================================================================
+
+(defvar twidget-event-types
+  '((click . (:map-property keymap
+              :event-trigger mouse-1
+              :doc "Triggered when element is clicked"))
+    (mouse-enter . (:map-property keymap
+                    :event-trigger mouse-1
+                    :doc "Triggered when mouse enters element"))
+    (mouse-leave . (:map-property keymap
+                    :event-trigger mouse-1
+                    :doc "Triggered when mouse leaves element")))
+  "Registry of supported event types.
+Each entry is (EVENT-TYPE . PLIST) where PLIST contains:
+  :map-property - The text property to use for the event map
+  :event-trigger - The default event trigger
+  :doc - Documentation string")
+
+(defvar-local twidget-event-context nil
+  "Buffer-local variable holding the current event context.
+This is a plist with :bindings (reactive bindings), :instance-id, etc.
+Used to resolve variable references in event handlers.")
+
+(defun twidget--is-event-prop-p (keyword)
+  "Return non-nil if KEYWORD is an event property (starts with :on-).
+Returns the event type as a symbol if it is an event property."
+  (when (keywordp keyword)
+    (let ((name (symbol-name keyword)))
+      (when (string-prefix-p ":on-" name)
+        (intern (substring name 4))))))
+
+(defun twidget--parse-event-expression (expr-string)
+  "Parse an event handler expression string EXPR-STRING.
+Returns a plist describing the expression:
+  :type - One of \\='method, \\='method-call, \\='expression
+  :content - The parsed content (varies by type)
+
+Examples:
+  \"doSomething\" -> (:type method :name \"doSomething\")
+  \"doSomething(foo)\" -> (:type method-call :name \"doSomething\" :args (\"foo\"))
+  \"count++\" -> (:type expression :statements ((\"count\" . increment)))
+  \"count--\" -> (:type expression :statements ((\"count\" . decrement)))
+  \"count=10\" -> (:type expression :statements ((\"count\" . (assign . 10))))
+  \"a++ ; b++\" -> (:type expression :statements (...))
+  \"flag ? doA() : doB()\" -> (:type expression :statements ((ternary ...)))"
+  (let* ((trimmed (string-trim expr-string))
+         (result nil))
+    (cond
+     ;; Check for multiple statements separated by ;
+     ((string-match-p ";" trimmed)
+      (let ((statements (mapcar #'string-trim (split-string trimmed ";" t))))
+        (setq result (list :type 'multi-statement
+                           :statements (mapcar #'twidget--parse-single-statement statements)))))
+     ;; Single statement
+     (t
+      (setq result (twidget--parse-single-statement trimmed))))
+    result))
+
+(defun twidget--parse-single-statement (stmt)
+  "Parse a single statement STMT.
+Returns a plist describing the statement."
+  (let ((trimmed (string-trim stmt)))
+    (cond
+     ;; Increment: count++
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\+\\+$" trimmed)
+      (list :type 'increment :var (match-string 1 trimmed)))
+
+     ;; Decrement: count--
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)--$" trimmed)
+      (list :type 'decrement :var (match-string 1 trimmed)))
+
+     ;; Assignment: var=value or var = value
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*=\\s-*\\(.+\\)$" trimmed)
+      (let ((var (match-string 1 trimmed))
+            (value-str (string-trim (match-string 2 trimmed))))
+        ;; Don't match == (equality) - only single =
+        (unless (string-prefix-p "=" value-str)
+          (list :type 'assignment :var var :value (twidget--parse-value-expr value-str)))))
+
+     ;; Ternary: condition ? trueExpr : falseExpr
+     ((string-match "^\\(.+?\\)\\s-*\\?\\s-*\\(.+?\\)\\s-*:\\s-*\\(.+\\)$" trimmed)
+      (list :type 'ternary
+            :condition (string-trim (match-string 1 trimmed))
+            :true-expr (twidget--parse-single-statement (string-trim (match-string 2 trimmed)))
+            :false-expr (twidget--parse-single-statement (string-trim (match-string 3 trimmed)))))
+
+     ;; Logical AND: expr && action
+     ((string-match "^\\(.+?\\)\\s-*&&\\s-*\\(.+\\)$" trimmed)
+      (list :type 'logical-and
+            :condition (string-trim (match-string 1 trimmed))
+            :action (twidget--parse-single-statement (string-trim (match-string 2 trimmed)))))
+
+     ;; Logical OR: expr || action
+     ((string-match "^\\(.+?\\)\\s-*||\\s-*\\(.+\\)$" trimmed)
+      (list :type 'logical-or
+            :condition (string-trim (match-string 1 trimmed))
+            :action (twidget--parse-single-statement (string-trim (match-string 2 trimmed)))))
+
+     ;; Method call with arguments: doSomething(arg1, arg2, ...)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*(\\(.*\\))$" trimmed)
+      (let* ((method (match-string 1 trimmed))
+             (args-str (match-string 2 trimmed))
+             (args (if (string-empty-p (string-trim args-str))
+                       nil
+                     (twidget--parse-arguments args-str))))
+        (list :type 'method-call :name method :args args)))
+
+     ;; Simple method reference: doSomething
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+      (list :type 'method :name trimmed))
+
+     ;; Fallback: treat as raw expression
+     (t
+      (list :type 'raw-expression :expr trimmed)))))
+
+(defun twidget--parse-arguments (args-str)
+  "Parse comma-separated arguments string ARGS-STR.
+Returns a list of parsed argument plists."
+  (let ((args nil)
+        (current "")
+        (paren-depth 0)
+        (in-string nil)
+        (string-char nil))
+    (dotimes (i (length args-str))
+      (let ((char (aref args-str i)))
+        (cond
+         ;; Handle string delimiters
+         ((and (not in-string) (or (= char ?\") (= char ?\')))
+          (setq in-string t
+                string-char char)
+          (setq current (concat current (string char))))
+         ((and in-string (= char string-char))
+          (setq in-string nil
+                string-char nil)
+          (setq current (concat current (string char))))
+         ;; Track parentheses depth
+         ((and (not in-string) (= char ?\())
+          (cl-incf paren-depth)
+          (setq current (concat current (string char))))
+         ((and (not in-string) (= char ?\)))
+          (cl-decf paren-depth)
+          (setq current (concat current (string char))))
+         ;; Comma at top level = argument separator
+         ((and (not in-string) (= paren-depth 0) (= char ?,))
+          (push (twidget--parse-argument (string-trim current)) args)
+          (setq current ""))
+         ;; Regular character
+         (t (setq current (concat current (string char)))))))
+    ;; Don't forget the last argument
+    (when (not (string-empty-p (string-trim current)))
+      (push (twidget--parse-argument (string-trim current)) args))
+    (nreverse args)))
+
+(defun twidget--parse-argument (arg-str)
+  "Parse a single argument string ARG-STR.
+Returns a plist describing the argument."
+  (let ((trimmed (string-trim arg-str)))
+    (cond
+     ;; $event - special event object reference
+     ((string= trimmed "$event")
+      (list :type 'event-ref))
+     ;; String literal (single or double quoted)
+     ((or (string-match "^\"\\(.*\\)\"$" trimmed)
+          (string-match "^'\\(.*\\)'$" trimmed))
+      (list :type 'string :value (match-string 1 trimmed)))
+     ;; Number literal
+     ((string-match "^-?[0-9]+\\(?:\\.[0-9]+\\)?$" trimmed)
+      (list :type 'number :value (string-to-number trimmed)))
+     ;; Boolean literals
+     ((string= trimmed "true")
+      (list :type 'boolean :value t))
+     ((string= trimmed "false")
+      (list :type 'boolean :value nil))
+     ((string= trimmed "nil")
+      (list :type 'boolean :value nil))
+     ;; Variable reference
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+      (list :type 'variable :name trimmed))
+     ;; Expression (fallback)
+     (t
+      (list :type 'expression :expr trimmed)))))
+
+(defun twidget--parse-value-expr (value-str)
+  "Parse a value expression VALUE-STR for assignment.
+Returns a plist describing the value."
+  (let ((trimmed (string-trim value-str)))
+    (cond
+     ;; Ternary in assignment: count === 0 ? 1 : 0
+     ((string-match "^\\(.+?\\)\\s-*\\?\\s-*\\(.+?\\)\\s-*:\\s-*\\(.+\\)$" trimmed)
+      (list :type 'ternary
+            :condition (string-trim (match-string 1 trimmed))
+            :true-value (twidget--parse-value-expr (string-trim (match-string 2 trimmed)))
+            :false-value (twidget--parse-value-expr (string-trim (match-string 3 trimmed)))))
+     ;; String literal
+     ((or (string-match "^\"\\(.*\\)\"$" trimmed)
+          (string-match "^'\\(.*\\)'$" trimmed))
+      (list :type 'string :value (match-string 1 trimmed)))
+     ;; Number literal
+     ((string-match "^-?[0-9]+\\(?:\\.[0-9]+\\)?$" trimmed)
+      (list :type 'number :value (string-to-number trimmed)))
+     ;; Boolean
+     ((string= trimmed "true")
+      (list :type 'boolean :value t))
+     ((string= trimmed "false")
+      (list :type 'boolean :value nil))
+     ;; Variable reference
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+      (list :type 'variable :name trimmed))
+     ;; Expression
+     (t
+      (list :type 'expression :expr trimmed)))))
+
+(defun twidget--compile-event-handler (parsed-expr bindings-plist)
+  "Compile PARSED-EXPR into an executable lambda.
+BINDINGS-PLIST is the reactive bindings from :setup, containing methods and refs.
+Returns a lambda function that can be used as an event handler."
+  (let ((stmt-type (plist-get parsed-expr :type)))
+    (pcase stmt-type
+      ;; Method reference - look up in bindings and return as callable
+      ('method
+       (let* ((method-name (plist-get parsed-expr :name))
+              (method-key (intern (format ":%s" method-name)))
+              (method-fn (plist-get bindings-plist method-key)))
+         (if method-fn
+             (lambda ()
+               (interactive)
+               (funcall method-fn))
+           ;; Method not found in bindings - could be a global function
+           (let ((global-fn (intern method-name)))
+             (lambda ()
+               (interactive)
+               (when (fboundp global-fn)
+                 (funcall global-fn)))))))
+
+      ;; Method call with arguments
+      ('method-call
+       (let* ((method-name (plist-get parsed-expr :name))
+              (args-parsed (plist-get parsed-expr :args))
+              (method-key (intern (format ":%s" method-name)))
+              (method-fn (plist-get bindings-plist method-key)))
+         (if method-fn
+             (lambda ()
+               (interactive)
+               (let ((args (twidget--resolve-arguments args-parsed bindings-plist)))
+                 (apply method-fn args)))
+           ;; Try global function
+           (let ((global-fn (intern method-name)))
+             (lambda ()
+               (interactive)
+               (when (fboundp global-fn)
+                 (let ((args (twidget--resolve-arguments args-parsed bindings-plist)))
+                   (apply global-fn args))))))))
+
+      ;; Increment operation
+      ('increment
+       (let ((var-name (plist-get parsed-expr :var)))
+         (lambda ()
+           (interactive)
+           (twidget-inc (intern var-name) 1))))
+
+      ;; Decrement operation
+      ('decrement
+       (let ((var-name (plist-get parsed-expr :var)))
+         (lambda ()
+           (interactive)
+           (twidget-dec (intern var-name) 1))))
+
+      ;; Assignment operation
+      ('assignment
+       (let ((var-name (plist-get parsed-expr :var))
+             (value-parsed (plist-get parsed-expr :value)))
+         (lambda ()
+           (interactive)
+           (let ((resolved-value (twidget--resolve-value value-parsed bindings-plist)))
+             (twidget-set (intern var-name) resolved-value)))))
+
+      ;; Multi-statement
+      ('multi-statement
+       (let ((statements (plist-get parsed-expr :statements)))
+         (lambda ()
+           (interactive)
+           (dolist (stmt statements)
+             (let ((handler (twidget--compile-event-handler stmt bindings-plist)))
+               (funcall handler))))))
+
+      ;; Ternary expression
+      ('ternary
+       (let ((condition-str (plist-get parsed-expr :condition))
+             (true-expr (plist-get parsed-expr :true-expr))
+             (false-expr (plist-get parsed-expr :false-expr)))
+         (lambda ()
+           (interactive)
+           (let ((condition-result (twidget--eval-condition condition-str bindings-plist)))
+             (if condition-result
+                 (let ((handler (twidget--compile-event-handler true-expr bindings-plist)))
+                   (funcall handler))
+               (let ((handler (twidget--compile-event-handler false-expr bindings-plist)))
+                 (funcall handler)))))))
+
+      ;; Logical AND
+      ('logical-and
+       (let ((condition-str (plist-get parsed-expr :condition))
+             (action-expr (plist-get parsed-expr :action)))
+         (lambda ()
+           (interactive)
+           (when (twidget--eval-condition condition-str bindings-plist)
+             (let ((handler (twidget--compile-event-handler action-expr bindings-plist)))
+               (funcall handler))))))
+
+      ;; Logical OR
+      ('logical-or
+       (let ((condition-str (plist-get parsed-expr :condition))
+             (action-expr (plist-get parsed-expr :action)))
+         (lambda ()
+           (interactive)
+           (unless (twidget--eval-condition condition-str bindings-plist)
+             (let ((handler (twidget--compile-event-handler action-expr bindings-plist)))
+               (funcall handler))))))
+
+      ;; Raw expression - eval as elisp
+      ('raw-expression
+       (let ((expr-str (plist-get parsed-expr :expr)))
+         (lambda ()
+           (interactive)
+           (twidget--eval-raw-expression expr-str bindings-plist))))
+
+      ;; Default - no-op
+      (_ (lambda () (interactive))))))
+
+(defun twidget--resolve-arguments (args-parsed bindings-plist)
+  "Resolve ARGS-PARSED list to actual values using BINDINGS-PLIST."
+  (mapcar (lambda (arg)
+            (twidget--resolve-value arg bindings-plist))
+          args-parsed))
+
+(defun twidget--resolve-value (value-parsed bindings-plist)
+  "Resolve VALUE-PARSED to an actual value using BINDINGS-PLIST."
+  (let ((value-type (plist-get value-parsed :type)))
+    (pcase value-type
+      ('string (plist-get value-parsed :value))
+      ('number (plist-get value-parsed :value))
+      ('boolean (plist-get value-parsed :value))
+      ('event-ref nil) ; $event would need special handling
+      ('variable
+       (let* ((var-name (plist-get value-parsed :name))
+              (var-key (intern (format ":%s" var-name)))
+              (ref-or-val (plist-get bindings-plist var-key)))
+         (if (twidget-ref-p ref-or-val)
+             (twidget-ref-value ref-or-val)
+           (or ref-or-val
+               ;; Try getting from reactive system
+               (twidget-get (intern var-name))))))
+      ('ternary
+       (let ((condition-str (plist-get value-parsed :condition))
+             (true-val (plist-get value-parsed :true-value))
+             (false-val (plist-get value-parsed :false-value)))
+         (if (twidget--eval-condition condition-str bindings-plist)
+             (twidget--resolve-value true-val bindings-plist)
+           (twidget--resolve-value false-val bindings-plist))))
+      ('expression
+       (twidget--eval-raw-expression (plist-get value-parsed :expr) bindings-plist))
+      (_ nil))))
+
+(defun twidget--eval-condition (condition-str bindings-plist)
+  "Evaluate CONDITION-STR as a boolean condition using BINDINGS-PLIST.
+Supports simple comparisons and variable references."
+  (let ((trimmed (string-trim condition-str)))
+    (cond
+     ;; Triple equals: var === value (strict equality)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*===\\s-*\\(.+\\)$" trimmed)
+      (let* ((var-name (match-string 1 trimmed))
+             (value-str (string-trim (match-string 2 trimmed)))
+             (var-value (twidget-get (intern var-name)))
+             (compare-value (twidget--parse-literal value-str)))
+        (equal var-value compare-value)))
+
+     ;; Double equals: var == value
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*==\\s-*\\(.+\\)$" trimmed)
+      (let* ((var-name (match-string 1 trimmed))
+             (value-str (string-trim (match-string 2 trimmed)))
+             (var-value (twidget-get (intern var-name)))
+             (compare-value (twidget--parse-literal value-str)))
+        (equal var-value compare-value)))
+
+     ;; Not equals: var != value
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*!=\\s-*\\(.+\\)$" trimmed)
+      (let* ((var-name (match-string 1 trimmed))
+             (value-str (string-trim (match-string 2 trimmed)))
+             (var-value (twidget-get (intern var-name)))
+             (compare-value (twidget--parse-literal value-str)))
+        (not (equal var-value compare-value))))
+
+     ;; Greater than: var > value
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*>\\s-*\\(.+\\)$" trimmed)
+      (let* ((var-name (match-string 1 trimmed))
+             (value-str (string-trim (match-string 2 trimmed)))
+             (var-value (twidget-get (intern var-name)))
+             (compare-value (twidget--parse-literal value-str)))
+        (and (numberp var-value) (numberp compare-value)
+             (> var-value compare-value))))
+
+     ;; Less than: var < value
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*<\\s-*\\(.+\\)$" trimmed)
+      (let* ((var-name (match-string 1 trimmed))
+             (value-str (string-trim (match-string 2 trimmed)))
+             (var-value (twidget-get (intern var-name)))
+             (compare-value (twidget--parse-literal value-str)))
+        (and (numberp var-value) (numberp compare-value)
+             (< var-value compare-value))))
+
+     ;; Simple variable reference (truthy check)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+      (let ((var-value (twidget-get (intern trimmed))))
+        (and var-value (not (equal var-value 0)) (not (string= var-value "")))))
+
+     ;; Negation: !var
+     ((string-match "^!\\s*\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+      (let ((var-value (twidget-get (intern (match-string 1 trimmed)))))
+        (not (and var-value (not (equal var-value 0)) (not (string= var-value ""))))))
+
+     ;; Default - try eval as elisp
+     (t
+      (condition-case nil
+          (twidget--eval-raw-expression trimmed bindings-plist)
+        (error nil))))))
+
+(defun twidget--parse-literal (value-str)
+  "Parse VALUE-STR as a literal value (string, number, boolean)."
+  (let ((trimmed (string-trim value-str)))
+    (cond
+     ;; String literal
+     ((or (string-match "^\"\\(.*\\)\"$" trimmed)
+          (string-match "^'\\(.*\\)'$" trimmed))
+      (match-string 1 trimmed))
+     ;; Number
+     ((string-match "^-?[0-9]+\\(?:\\.[0-9]+\\)?$" trimmed)
+      (string-to-number trimmed))
+     ;; Boolean
+     ((string= trimmed "true") t)
+     ((string= trimmed "false") nil)
+     ((string= trimmed "nil") nil)
+     ;; Variable reference
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+      (twidget-get (intern trimmed)))
+     ;; Default - return as string
+     (t trimmed))))
+
+(defun twidget--eval-raw-expression (expr-str bindings-plist)
+  "Evaluate EXPR-STR as a raw expression.
+Uses BINDINGS-PLIST to resolve variables if needed.
+This is a fallback for complex expressions."
+  ;; For safety, we create a controlled evaluation environment
+  ;; First, try to substitute known variable names
+  (let ((result-expr expr-str))
+    ;; Replace variable references with their values
+    (let ((plist bindings-plist))
+      (while plist
+        (let ((key (car plist))
+              (val (cadr plist)))
+          (when (keywordp key)
+            (let* ((var-name (substring (symbol-name key) 1))
+                   (actual-value (if (twidget-ref-p val)
+                                     (twidget-ref-value val)
+                                   val)))
+              ;; Replace variable name with value in expression
+              (when (string-match-p (regexp-quote var-name) result-expr)
+                (setq result-expr
+                      (replace-regexp-in-string
+                       (format "\\b%s\\b" (regexp-quote var-name))
+                       (if (stringp actual-value)
+                           (format "\"%s\"" actual-value)
+                         (format "%S" actual-value))
+                       result-expr))))))
+        (setq plist (cddr plist))))
+    ;; Evaluate the transformed expression
+    (condition-case err
+        (eval (car (read-from-string (format "(progn %s)" result-expr)))
+              `((twidget-get . ,#'twidget-get)
+                (twidget-set . ,#'twidget-set)
+                (twidget-inc . ,#'twidget-inc)
+                (twidget-dec . ,#'twidget-dec)))
+      (error
+       (message "twidget: Error evaluating expression '%s': %s" expr-str err)
+       nil))))
+
+(defun twidget--create-click-handler (handler-fn)
+  "Create a keymap with HANDLER-FN bound to mouse click.
+Returns a keymap suitable for use as a text property."
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] handler-fn)
+    (define-key map (kbd "RET") handler-fn)
+    (define-key map (kbd "<return>") handler-fn)
+    map))
+
+(defun twidget--process-event-prop (event-type handler-string bindings-plist)
+  "Process an event property of type EVENT-TYPE with HANDLER-STRING.
+Uses BINDINGS-PLIST for variable and method resolution.
+Returns a plist of text properties to apply."
+  (let* ((parsed (twidget--parse-event-expression handler-string))
+         (handler-fn (twidget--compile-event-handler parsed bindings-plist)))
+    (pcase event-type
+      ('click
+       (list 'keymap (twidget--create-click-handler handler-fn)
+             'mouse-face 'highlight
+             'cursor 'hand))
+      (_ nil))))
+
+(defun twidget--apply-event-properties (text event-props)
+  "Apply EVENT-PROPS (a plist of text properties) to TEXT.
+Returns the TEXT with properties applied."
+  (if event-props
+      (apply #'propertize text event-props)
+    text))
 
 ;;; Built-in widgets
 
