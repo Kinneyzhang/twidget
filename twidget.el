@@ -335,6 +335,10 @@ There are two ways to define a widget:
               t means widget supports a single default slot.
               A list of symbols defines named slots.
      :slots - Alias for :slot with named slots (for clarity)
+     :type  - Widget display type (symbol).
+              \\='inline (default) - Inline element, no automatic line breaks.
+              \\='block - Block element, adds newline after content when followed
+                        by other content.
      :extends - Symbol of a parent widget to inherit from.
      :render - A lambda that returns the rendered string.
                For single slot: (lambda (props slot) ...)
@@ -385,6 +389,7 @@ There are two ways to define a widget:
   (declare (indent defun))
   (let ((props nil)
         (slot :twidget--unspecified)  ; Sentinel value to detect if :slot was provided
+        (type :twidget--unspecified)  ; Sentinel value to detect if :type was provided
         (extends nil)
         (render nil)
         (setup nil)
@@ -396,6 +401,7 @@ There are two ways to define a widget:
         (:props (setq props (cadr rest) rest (cddr rest)))
         (:slot (setq slot (cadr rest) rest (cddr rest)))
         (:slots (setq slot (cadr rest) rest (cddr rest)))  ; Alias for named slots
+        (:type (setq type (cadr rest) rest (cddr rest)))
         (:extends (setq extends (cadr rest) rest (cddr rest)))
         (:render (setq render (cadr rest) rest (cddr rest)))
         (:setup (setq setup (cadr rest) rest (cddr rest)))
@@ -415,22 +421,26 @@ There are two ways to define a widget:
     ;; Other values (t, nil, or list) should evaluate properly
     (let ((slot-form (if (eq slot :twidget--unspecified)
                          :twidget--unspecified
-                       ;; If slot is a quoted list (from ':slots '(x y z)),
-                       ;; the value is actually (quote (x y z)), so we just pass it
-                       slot)))
-      `(twidget-internal ',name ,props ,slot-form ,extends ,render ,setup ,template))))
+                       slot))
+          (type-form (if (eq type :twidget--unspecified)
+                         :twidget--unspecified
+                       type)))
+      `(twidget-internal ',name ,props ,slot-form ,type-form ,extends ,render ,setup ,template))))
 
-(defun twidget-internal (name props slot extends render setup template)
-  "Internal function to define a widget NAME with PROPS, SLOT, EXTENDS, RENDER, SETUP, and TEMPLATE.
+(defun twidget-internal (name props slot type extends render setup template)
+  "Internal function to define a widget NAME with PROPS, SLOT, TYPE, EXTENDS, RENDER, SETUP, and TEMPLATE.
 PROPS is a list of property definitions.
 SLOT is a boolean, list of slot names, or :twidget--unspecified (not provided).
+TYPE is the widget display type (inline or block), or :twidget--unspecified.
 EXTENDS is a symbol of a parent widget to inherit from.
 RENDER is the render function (for simple widgets).
 SETUP is a function that returns reactive bindings (for composite widgets).
 TEMPLATE is a template sexp (for composite widgets)."
   ;; Handle inheritance if :extends is specified
   (let* ((slot-was-specified (not (eq slot :twidget--unspecified)))
+         (type-was-specified (not (eq type :twidget--unspecified)))
          (final-slot (if slot-was-specified slot nil))
+         (final-type (if type-was-specified type 'inline))  ; Default to 'inline
          (final-props props)
          (parent-render nil))
     (when extends
@@ -440,6 +450,9 @@ TEMPLATE is a template sexp (for composite widgets)."
         ;; Inherit slot from parent only if child didn't specify :slot
         (unless slot-was-specified
           (setq final-slot (plist-get parent-def :slot)))
+        ;; Inherit type from parent only if child didn't specify :type
+        (unless type-was-specified
+          (setq final-type (or (plist-get parent-def :type) 'inline)))
         ;; Merge props: child props override parent defaults
         (let ((parent-props (plist-get parent-def :props)))
           (setq final-props (twidget-props parent-props final-props)))
@@ -456,6 +469,7 @@ TEMPLATE is a template sexp (for composite widgets)."
             (setq parent-render (plist-get parent-def :render))))))
     (let ((definition (list :props final-props
                             :slot final-slot
+                            :type final-type
                             :extends extends
                             :parent-render parent-render
                             :render render
@@ -513,6 +527,25 @@ Returns nil if no default is specified."
 (defun twidget-prop-has-default-p (prop-def)
   "Return non-nil if PROP-DEF has a default value."
   (consp prop-def))
+
+;;; Type Helpers
+;; ============================================================================
+
+(defun twidget-get-widget-type (widget-name)
+  "Get the display type of widget WIDGET-NAME.
+Returns \\='inline (default) or \\='block."
+  (let ((definition (cdr (assoc widget-name twidget-alist))))
+    (if definition
+        (or (plist-get definition :type) 'inline)
+      'inline)))
+
+(defun twidget-is-block-widget-p (form)
+  "Return non-nil if FORM represents a block-type widget.
+FORM should be a widget form like (widget-name ...)."
+  (and (listp form)
+       (symbolp (car form))
+       (assoc (car form) twidget-alist)
+       (eq (twidget-get-widget-type (car form)) 'block)))
 
 ;;; Slot Helpers
 ;; ============================================================================
@@ -757,13 +790,46 @@ REACTIVE-BINDINGS is the original plist from :setup, used for event handlers."
          (symbolp (car template))
          (assoc (car template) twidget-alist))
     (twidget--expand-template-widget template bindings instance-id reactive-bindings))
-   ;; List of forms - process each
+   ;; List of forms - process each with block element handling
    ((listp template)
-    (mapconcat (lambda (form)
-                 (twidget--expand-template form bindings instance-id reactive-bindings))
-               template ""))
+    (twidget--expand-template-list template bindings instance-id reactive-bindings))
    ;; Other - convert to string
    (t (format "%s" template))))
+
+(defun twidget--expand-template-list (forms bindings instance-id &optional reactive-bindings)
+  "Expand a list of FORMS into a rendered string with block element handling.
+BINDINGS is an alist of (VAR-NAME . VALUE) for placeholder substitution.
+INSTANCE-ID is the widget instance identifier for reactivity.
+REACTIVE-BINDINGS is the original plist from :setup, used for event handlers.
+
+Block element handling follows HTML-like rules:
+- Block elements start on a new line (newline added before if preceded by content)
+- Block elements are followed by a newline (when followed by other content)
+- Inline elements flow together without automatic newlines"
+  (let ((result "")
+        (forms-list forms)
+        (len (length forms))
+        (prev-was-block nil))
+    (dotimes (i len)
+      (let* ((form (nth i forms-list))
+             (is-first (= i 0))
+             (is-last (= i (1- len)))
+             (is-block (twidget-is-block-widget-p form))
+             (rendered (twidget--expand-template form bindings instance-id reactive-bindings)))
+        ;; Add newline BEFORE block element if there's previous content
+        ;; (Block elements start on a new line)
+        (when (and is-block (not is-first) (not (string-empty-p result)))
+          (unless (string-suffix-p "\n" result)
+            (setq result (concat result "\n"))))
+        ;; Append the rendered content
+        (setq result (concat result rendered))
+        ;; Add newline AFTER block element if not the last element
+        ;; (Block elements are followed by a newline)
+        (when (and is-block (not is-last))
+          (unless (string-suffix-p "\n" result)
+            (setq result (concat result "\n"))))
+        (setq prev-was-block is-block)))
+    result))
 
 (defun twidget--expand-template-string (str bindings instance-id)
   "Expand STR template string with BINDINGS.
@@ -978,11 +1044,31 @@ substitution."
 (defun twidget-process-slot-args (args &optional bindings)
   "Process multiple slot ARGS into a single concatenated string.
 BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
-substitution."
-  (let ((slot-parts nil))
-    (dolist (slot-item args)
-      (push (twidget-process-slot-value slot-item bindings) slot-parts))
-    (apply #'concat (nreverse slot-parts))))
+substitution.
+
+Block element handling follows HTML-like rules:
+- Block elements start on a new line (newline added before if preceded by content)
+- Block elements are followed by a newline (when followed by other content)
+- Inline elements flow together without automatic newlines"
+  (let ((result "")
+        (len (length args)))
+    (dotimes (i len)
+      (let* ((slot-item (nth i args))
+             (is-first (= i 0))
+             (is-last (= i (1- len)))
+             (is-block (twidget-is-block-widget-p slot-item))
+             (rendered (twidget-process-slot-value slot-item bindings)))
+        ;; Add newline BEFORE block element if there's previous content
+        (when (and is-block (not is-first) (not (string-empty-p result)))
+          (unless (string-suffix-p "\n" result)
+            (setq result (concat result "\n"))))
+        ;; Append the rendered content
+        (setq result (concat result rendered))
+        ;; Add newline AFTER block element if not the last element
+        (when (and is-block (not is-last))
+          (unless (string-suffix-p "\n" result)
+            (setq result (concat result "\n"))))))
+    result))
 
 (defun twidget-reset ()
   "Reset all widget definitions."
