@@ -1801,7 +1801,7 @@ Handles atoms (symbols, numbers, strings) and parenthesized expressions."
                             (= c ?_)
                             (= c ?-))))
             (cl-incf i))
-          i)))))))
+          i))))))
 
 (defun twidget--create-click-handler (handler-fn)
   "Create a keymap with HANDLER-FN bound to mouse click.
