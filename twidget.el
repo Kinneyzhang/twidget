@@ -779,19 +779,20 @@ Returns a plist with:
               (when args
                 (if (eq arg :for)
                     (push (car args) result)
-                  (push (twidget--process-template-arg (car args) bindings instance-id) result))
+                  (push (twidget--process-template-arg (car args) bindings instance-id reactive-bindings) result))
                 (setq args (cdr args))))))
          ;; Non-keyword (slot) arguments
          (t
           (if has-for
               (push arg result)
-            (push (twidget--process-template-arg arg bindings instance-id) result))
+            (push (twidget--process-template-arg arg bindings instance-id reactive-bindings) result))
           (setq args (cdr args))))))
     (list :args (nreverse result) :event-props event-props)))
 
-(defun twidget--process-template-arg (arg bindings instance-id)
+(defun twidget--process-template-arg (arg bindings instance-id &optional reactive-bindings)
   "Process a single template ARG with BINDINGS.
-INSTANCE-ID is used for reactive tracking."
+INSTANCE-ID is used for reactive tracking.
+REACTIVE-BINDINGS is the original plist from :setup, used for event handlers."
   (cond
    ;; String - substitute placeholders
    ((stringp arg)
@@ -800,7 +801,7 @@ INSTANCE-ID is used for reactive tracking."
    ((and (listp arg)
          (symbolp (car arg))
          (assoc (car arg) twidget-alist))
-    (twidget--expand-template arg bindings instance-id))
+    (twidget--expand-template arg bindings instance-id reactive-bindings))
    ;; Lambda/function - return as is
    ((functionp arg) arg)
    ;; List that might be a lambda form
@@ -808,7 +809,7 @@ INSTANCE-ID is used for reactive tracking."
    ;; Other list - might need recursive processing
    ((listp arg)
     (mapcar (lambda (x)
-              (twidget--process-template-arg x bindings instance-id))
+              (twidget--process-template-arg x bindings instance-id reactive-bindings))
             arg))
    ;; Other - return as is
    (t arg)))
