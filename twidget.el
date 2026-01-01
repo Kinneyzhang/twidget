@@ -1164,18 +1164,30 @@ Returns the event type as a symbol if it is an event property."
 
 (defun twidget--parse-event-expression (expr-string)
   "Parse an event handler expression string EXPR-STRING.
-Returns a plist describing the expression:
-  :type - One of \\='method, \\='method-call, \\='expression
-  :content - The parsed content (varies by type)
+Returns a plist describing the expression.
+
+For single statements, returns a plist with :type being one of:
+  \\='method - Simple method reference
+  \\='method-call - Method with arguments
+  \\='increment - Variable increment (var++)
+  \\='decrement - Variable decrement (var--)
+  \\='assignment - Variable assignment (var=value)
+  \\='ternary - Ternary expression (cond ? a : b)
+  \\='logical-and - Logical AND (cond && action)
+  \\='logical-or - Logical OR (cond || action)
+  \\='raw-expression - Fallback for complex expressions
+
+For multi-statement expressions (separated by ;), returns:
+  (:type multi-statement :statements LIST-OF-PARSED-STATEMENTS)
 
 Examples:
   \"doSomething\" -> (:type method :name \"doSomething\")
-  \"doSomething(foo)\" -> (:type method-call :name \"doSomething\" :args (\"foo\"))
-  \"count++\" -> (:type expression :statements ((\"count\" . increment)))
-  \"count--\" -> (:type expression :statements ((\"count\" . decrement)))
-  \"count=10\" -> (:type expression :statements ((\"count\" . (assign . 10))))
-  \"a++ ; b++\" -> (:type expression :statements (...))
-  \"flag ? doA() : doB()\" -> (:type expression :statements ((ternary ...)))"
+  \"doSomething(foo)\" -> (:type method-call :name \"doSomething\" :args (...))
+  \"count++\" -> (:type increment :var \"count\")
+  \"count--\" -> (:type decrement :var \"count\")
+  \"count=10\" -> (:type assignment :var \"count\" :value (...))
+  \"a++ ; b++\" -> (:type multi-statement :statements (...))
+  \"flag ? doA() : doB()\" -> (:type ternary :condition \"flag\" ...)"
   (let* ((trimmed (string-trim expr-string))
          (result nil))
     (cond
@@ -1202,13 +1214,13 @@ Returns a plist describing the statement."
      ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)--$" trimmed)
       (list :type 'decrement :var (match-string 1 trimmed)))
 
-     ;; Assignment: var=value or var = value
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*=\\s-*\\(.+\\)$" trimmed)
+     ;; Assignment: var=value or var = value (but not == or ===)
+     ((and (string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*=\\([^=].*\\)$" trimmed)
+           ;; Additional check: value must not start with = (catches ===)
+           (not (string-match "^\\s-*=" (match-string 2 trimmed))))
       (let ((var (match-string 1 trimmed))
             (value-str (string-trim (match-string 2 trimmed))))
-        ;; Don't match == (equality) - only single =
-        (unless (string-prefix-p "=" value-str)
-          (list :type 'assignment :var var :value (twidget--parse-value-expr value-str)))))
+        (list :type 'assignment :var var :value (twidget--parse-value-expr value-str))))
 
      ;; Ternary: condition ? trueExpr : falseExpr
      ((string-match "^\\(.+?\\)\\s-*\\?\\s-*\\(.+?\\)\\s-*:\\s-*\\(.+\\)$" trimmed)
@@ -1581,10 +1593,49 @@ Supports simple comparisons and variable references."
 (defun twidget--eval-raw-expression (expr-str bindings-plist)
   "Evaluate EXPR-STR as a raw expression.
 Uses BINDINGS-PLIST to resolve variables if needed.
-This is a fallback for complex expressions."
+This is a fallback for complex expressions.
+
+SECURITY NOTE: This function evaluates user expressions in a restricted
+environment. Only safe functions from the twidget API are exposed.
+Dangerous functions like `shell-command', `eval', `funcall' on arbitrary
+symbols, file operations, etc. are NOT available in the evaluation context."
+  ;; Validate expression doesn't contain dangerous patterns
+  (when (string-match-p (rx (or "shell" "process" "file" "write" "delete"
+                                "kill" "exec" "load" "require" "eval"
+                                "call-process" "start-process"))
+                        expr-str)
+    (error "twidget: Expression contains potentially unsafe function calls"))
   ;; For safety, we create a controlled evaluation environment
   ;; First, try to substitute known variable names
-  (let ((result-expr expr-str))
+  (let ((result-expr expr-str)
+        (safe-env nil))
+    ;; Build safe evaluation environment with only allowed functions
+    (setq safe-env
+          `((twidget-get . ,#'twidget-get)
+            (twidget-set . ,#'twidget-set)
+            (twidget-inc . ,#'twidget-inc)
+            (twidget-dec . ,#'twidget-dec)
+            (+ . ,#'+)
+            (- . ,#'-)
+            (* . ,#'*)
+            (/ . ,#'/)
+            (= . ,#'=)
+            (< . ,#'<)
+            (> . ,#'>)
+            (<= . ,#'<=)
+            (>= . ,#'>=)
+            (not . ,#'not)
+            (and . ,(symbol-function 'and))
+            (or . ,(symbol-function 'or))
+            (if . ,(symbol-function 'if))
+            (when . ,(symbol-function 'when))
+            (unless . ,(symbol-function 'unless))
+            (equal . ,#'equal)
+            (string= . ,#'string=)
+            (numberp . ,#'numberp)
+            (stringp . ,#'stringp)
+            (message . ,#'message)
+            (format . ,#'format)))
     ;; Replace variable references with their values
     (let ((plist bindings-plist))
       (while plist
@@ -1601,17 +1652,14 @@ This is a fallback for complex expressions."
                       (replace-regexp-in-string
                        (format "\\b%s\\b" (regexp-quote var-name))
                        (if (stringp actual-value)
-                           (format "\"%s\"" actual-value)
+                           (format "\"%s\"" (replace-regexp-in-string "\"" "\\\\\"" actual-value))
                          (format "%S" actual-value))
                        result-expr))))))
         (setq plist (cddr plist))))
-    ;; Evaluate the transformed expression
+    ;; Evaluate the transformed expression in restricted environment
     (condition-case err
         (eval (car (read-from-string (format "(progn %s)" result-expr)))
-              `((twidget-get . ,#'twidget-get)
-                (twidget-set . ,#'twidget-set)
-                (twidget-inc . ,#'twidget-inc)
-                (twidget-dec . ,#'twidget-dec)))
+              safe-env)
       (error
        (message "twidget: Error evaluating expression '%s': %s" expr-str err)
        nil))))
