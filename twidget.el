@@ -208,28 +208,24 @@ Returns text with tp.el properties for reactive updates."
 
 (defun twidget--apply-static-tp-props (text props-plist)
   "Apply static tp.el text properties from PROPS-PLIST to TEXT.
-PROPS-PLIST is a plist like (face (:background \"red\") tp-button (:palette info)).
-Returns text with properties applied using tp-set for each property."
-  (let ((result text)
-        (props props-plist))
-    (while props
-      (let ((prop-name (car props))
-            (prop-value (cadr props)))
-        (setq result (tp-set result prop-name prop-value))
-        (setq props (cddr props))))
-    result))
+PROPS-PLIST is a plist like (face (:background \"red\") tp-palette info).
+Uses tp-add to apply all properties at once with proper merging."
+  (if props-plist
+      (apply #'tp-add text props-plist)
+    text))
 
 (defun twidget--apply-reactive-tp-props (text value-fn instance-id)
   "Apply reactive tp.el text properties to TEXT using VALUE-FN.
 VALUE-FN is a function that returns a props plist when called.
 INSTANCE-ID is used for reactive tracking.
-Returns text with tp.el properties for reactive updates."
-  ;; For reactive tp-props, we apply each property from the computed plist
-  ;; and track them for updates
+Returns text with tp.el properties for reactive updates.
+Uses tp-add to apply all properties at once with proper merging."
+  ;; For reactive tp-props, we create symbols for each property value
+  ;; and build a plist with symbol references, then apply with tp-add
   (let* ((prop-id (cl-incf twidget-reactive-prop-counter))
          (initial-props (funcall value-fn))
-         (result text))
-    ;; Apply each property reactively
+         (reactive-props nil))
+    ;; Build reactive props plist with symbol references
     (let ((props initial-props))
       (while props
         (let* ((prop-name (car props))
@@ -242,10 +238,14 @@ Returns text with tp.el properties for reactive updates."
             (puthash key
                      (cons (list sym value-fn prop-name) (gethash key twidget-reactive-prop-symbols))
                      twidget-reactive-prop-symbols))
-          ;; Apply the property with reactive symbol reference
-          (setq result (tp-set result prop-name (intern (format "$%s" sym))))
+          ;; Add to reactive props plist with symbol reference
+          (setq reactive-props (append reactive-props
+                                       (list prop-name (intern (format "$%s" sym)))))
           (setq props (cddr props)))))
-    result))
+    ;; Apply all properties at once with tp-add for proper merging
+    (if reactive-props
+        (apply #'tp-add text reactive-props)
+      text)))
 
 (defun twidget--update-reactive-prop-symbols (instance-id)
   "Update all reactive property symbols for INSTANCE-ID.
