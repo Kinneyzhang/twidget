@@ -211,8 +211,14 @@ For widgets that compose other widgets with reactive state:
   :setup (lambda (props _slot)
            ;; Initialize reactive state
            (list :active (twidget-ref nil)
-                 :buttonLabel (plist-get props :label)))
+                 :buttonLabel (plist-get props :label)
+                 ;; Reactive face function
+                 :buttonFace (lambda ()
+                               (if (twidget-get 'active)
+                                   '(:background "green")
+                                 '(:background "gray")))))
   :template '(span :on-click "active = !active"
+                   :face "buttonFace()"
                    "[{buttonLabel}: {active}]"))
 
 ;; Usage
@@ -447,6 +453,68 @@ The event system provides Vue3-like declarative event binding.
 ```
 
 For more details, see [Event System Documentation](docs/event-system.md).
+
+---
+
+## 🎨 Reactive Face
+
+The `:face` property enables dynamic styling that updates when reactive variables change.
+
+### Basic Usage
+
+```elisp
+(define-twidget toggle-button
+  :props '((label . "Toggle"))
+  :setup (lambda (props _slot)
+           (list :active (twidget-ref nil)
+                 :buttonLabel (plist-get props :label)
+                 :buttonFace (lambda ()
+                               (if (twidget-get 'active)
+                                   '(:background "green" :foreground "white")
+                                 '(:background "gray" :foreground "black")))))
+  :template '(span :on-click "active = !active"
+                   :face "buttonFace()"
+                   "[{buttonLabel}: {active}]"))
+
+(tp-pop-to-buffer "*toggle-demo*"
+  (twidget-insert '(toggle-button :label "Dark Mode")))
+```
+
+Click the button to toggle between green and gray backgrounds!
+
+### Face Value Types
+
+The `:face` property accepts several value types:
+
+| Type | Example | Description |
+|------|---------|-------------|
+| Face symbol | `:face bold` | Standard Emacs face |
+| Face plist | `:face '(:background "red")` | Inline face specification |
+| Method call | `:face "getFace()"` | Reactive - calls function from `:setup` |
+| Variable ref | `:face "faceVar"` | Reactive - references variable from `:setup` |
+
+### Method-based Reactive Face
+
+Use a method that computes the face based on current state:
+
+```elisp
+(define-twidget status-indicator
+  :setup (lambda (_props _slot)
+           (list :status (twidget-ref "ok")
+                 :statusFace (lambda ()
+                               (pcase (twidget-get 'status)
+                                 ("ok" '(:background "green"))
+                                 ("warning" '(:background "yellow"))
+                                 ("error" '(:background "red"))
+                                 (_ '(:background "gray"))))))
+  :template '(div
+              (span :face "statusFace()" "[{status}]")
+              " "
+              (span :on-click "status = 'ok'" "[OK]")
+              " "
+              (span :on-click "status = 'warning'" "[Warn]")
+              " "
+              (span :on-click "status = 'error'" "[Error]")))
 
 ---
 

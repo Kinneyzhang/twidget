@@ -211,8 +211,14 @@ twidget 支持两种定义组件的方式：
   :setup (lambda (props _slot)
            ;; 初始化响应式状态
            (list :active (twidget-ref nil)
-                 :buttonLabel (plist-get props :label)))
+                 :buttonLabel (plist-get props :label)
+                 ;; 响应式样式函数
+                 :buttonFace (lambda ()
+                               (if (twidget-get 'active)
+                                   '(:background "green")
+                                 '(:background "gray")))))
   :template '(span :on-click "active = !active"
+                   :face "buttonFace()"
                    "[{buttonLabel}: {active}]"))
 
 ;; 使用
@@ -447,6 +453,69 @@ twidget 支持两种定义组件的方式：
 ```
 
 更多详情请参阅[事件系统文档](docs/event-system.md)。
+
+---
+
+## 🎨 响应式样式 (Reactive Face)
+
+`:face` 属性支持动态样式，当响应式变量改变时会自动更新样式。
+
+### 基本用法
+
+```elisp
+(define-twidget toggle-button
+  :props '((label . "切换"))
+  :setup (lambda (props _slot)
+           (list :active (twidget-ref nil)
+                 :buttonLabel (plist-get props :label)
+                 :buttonFace (lambda ()
+                               (if (twidget-get 'active)
+                                   '(:background "green" :foreground "white")
+                                 '(:background "gray" :foreground "black")))))
+  :template '(span :on-click "active = !active"
+                   :face "buttonFace()"
+                   "[{buttonLabel}: {active}]"))
+
+(tp-pop-to-buffer "*toggle-demo*"
+  (twidget-insert '(toggle-button :label "深色模式")))
+```
+
+点击按钮可以在绿色和灰色背景之间切换！
+
+### Face 值类型
+
+`:face` 属性支持多种值类型：
+
+| 类型 | 示例 | 说明 |
+|------|------|------|
+| Face 符号 | `:face bold` | 标准 Emacs face |
+| Face plist | `:face '(:background "red")` | 内联 face 定义 |
+| 方法调用 | `:face "getFace()"` | 响应式 - 调用 `:setup` 中的方法 |
+| 变量引用 | `:face "faceVar"` | 响应式 - 引用 `:setup` 中的变量 |
+
+### 基于方法的响应式样式
+
+使用一个方法根据当前状态计算样式：
+
+```elisp
+(define-twidget status-indicator
+  :setup (lambda (_props _slot)
+           (list :status (twidget-ref "ok")
+                 :statusFace (lambda ()
+                               (pcase (twidget-get 'status)
+                                 ("ok" '(:background "green"))
+                                 ("warning" '(:background "yellow"))
+                                 ("error" '(:background "red"))
+                                 (_ '(:background "gray"))))))
+  :template '(div
+              (span :face "statusFace()" "[{status}]")
+              " "
+              (span :on-click "status = 'ok'" "[正常]")
+              " "
+              (span :on-click "status = 'warning'" "[警告]")
+              " "
+              (span :on-click "status = 'error'" "[错误]")))
+```
 
 ---
 

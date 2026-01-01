@@ -97,6 +97,15 @@ Keys are (instance-id . var-name), values are lists of symbols to update.")
 (defvar twidget--instance-counter 0
   "Counter for generating unique instance IDs.")
 
+(defvar-local twidget-reactive-faces nil
+  "Buffer-local list of reactive face entries.
+Each entry is a plist with:
+  :marker-start - marker at the start of the text region
+  :marker-end - marker at the end of the text region
+  :face-fn - function that returns the face spec when called
+  :deps - list of variable names this face depends on
+  :instance-id - the widget instance ID")
+
 ;;; Reactive Reference (twidget-ref)
 ;; ============================================================================
 
@@ -198,6 +207,116 @@ Returns text with tp.el properties for reactive updates."
                twidget-reactive-symbols))
     ;; Use tp-set with the tp-text property type and the reactive symbol reference
     (tp-set text 'tp-text (intern (format "$%s" sym)))))
+
+(defvar-local twidget-reactive-face-counter 0
+  "Counter for generating unique reactive face IDs.")
+
+(defun twidget--is-face-prop-p (keyword)
+  "Return non-nil if KEYWORD is a :face property."
+  (eq keyword :face))
+
+(defun twidget--parse-face-expression (face-expr reactive-bindings)
+  "Parse FACE-EXPR and return a plist with face info.
+FACE-EXPR can be:
+  - A face symbol: \\='bold
+  - A face plist: \\='(:background \"red\")
+  - A string referencing a method: \"getFace()\"
+  - A string referencing a variable: \"faceVar\"
+
+REACTIVE-BINDINGS is the plist from :setup.
+
+Returns a plist with:
+  :face - the initial face value
+  :face-fn - a function to get the face (or nil if static)
+  :deps - list of variable names this depends on (or nil if static)"
+  (cond
+   ;; Direct face spec (symbol or list)
+   ((or (symbolp face-expr) (and (listp face-expr) (not (stringp face-expr))))
+    (list :face face-expr :face-fn nil :deps nil))
+   ;; String expression - could be method call or variable reference
+   ((stringp face-expr)
+    (let ((trimmed (string-trim face-expr)))
+      (cond
+       ;; Method call: "getFace()" or "getFace(arg)"
+       ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*(\\(.*\\))$" trimmed)
+        (let* ((method-name (match-string 1 trimmed))
+               (method-key (intern (format ":%s" method-name)))
+               (method-fn (plist-get reactive-bindings method-key)))
+          (if (functionp method-fn)
+              (list :face (funcall method-fn)
+                    :face-fn method-fn
+                    :deps t)  ; t means depends on all reactive vars
+            (list :face nil :face-fn nil :deps nil))))
+       ;; Variable reference: "faceVar"
+       ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+        (let* ((var-name trimmed)
+               (var-key (intern (format ":%s" var-name)))
+               (ref-or-val (plist-get reactive-bindings var-key)))
+          (if ref-or-val
+              (let ((face-val (if (twidget-ref-p ref-or-val)
+                                  (twidget-ref-value ref-or-val)
+                                ref-or-val)))
+                (list :face face-val
+                      :face-fn (if (twidget-ref-p ref-or-val)
+                                   (lambda () (twidget-get (intern var-name)))
+                                 nil)
+                      :deps (if (twidget-ref-p ref-or-val)
+                                (list var-name)
+                              nil)))
+            (list :face nil :face-fn nil :deps nil))))
+       ;; Unknown format
+       (t (list :face nil :face-fn nil :deps nil)))))
+   ;; Other
+   (t (list :face face-expr :face-fn nil :deps nil))))
+
+(defun twidget--register-reactive-face (text-start text-end face-fn instance-id deps)
+  "Register a reactive face for the text region from TEXT-START to TEXT-END.
+FACE-FN is a function that returns the face spec.
+INSTANCE-ID is the widget instance.
+DEPS is a list of variable names this face depends on, or t for all."
+  (let ((entry (list :marker-start (copy-marker text-start)
+                     :marker-end (copy-marker text-end t)  ; insertion type t
+                     :face-fn face-fn
+                     :deps deps
+                     :instance-id instance-id)))
+    (push entry twidget-reactive-faces)))
+
+(defun twidget--update-reactive-faces (var-name)
+  "Update all reactive faces that depend on VAR-NAME.
+Called when a reactive variable changes."
+  (dolist (entry twidget-reactive-faces)
+    (let ((deps (plist-get entry :deps))
+          (face-fn (plist-get entry :face-fn))
+          (start (plist-get entry :marker-start))
+          (end (plist-get entry :marker-end)))
+      ;; Check if this face depends on the changed variable
+      (when (and face-fn
+                 (marker-buffer start)  ; markers still valid
+                 (marker-buffer end)
+                 (or (eq deps t)  ; depends on all
+                     (member var-name deps)))
+        ;; Update the face
+        (let ((new-face (funcall face-fn)))
+          (with-current-buffer (marker-buffer start)
+            (put-text-property (marker-position start)
+                               (marker-position end)
+                               'face new-face)))))))
+
+(defun twidget--wrap-reactive-face (text face-fn instance-id deps)
+  "Wrap TEXT with a special property to enable reactive face tracking.
+FACE-FN is the function to compute the face.
+INSTANCE-ID is the widget instance ID.
+DEPS is the list of dependencies.
+
+This function returns TEXT with a special property that, when inserted
+into the buffer, will register the text region for reactive face updates."
+  ;; Add a special property that we can detect after insertion
+  (let ((face-id (cl-incf twidget-reactive-face-counter)))
+    (propertize text
+                'twidget-reactive-face-id face-id
+                'twidget-reactive-face-fn face-fn
+                'twidget-reactive-face-instance instance-id
+                'twidget-reactive-face-deps deps)))
 
 ;;; Widget Definition
 ;; ============================================================================
@@ -688,16 +807,30 @@ REACTIVE-BINDINGS is the original plist from :setup, used for event handlers."
   (let ((widget-name (car template))
         (rest (cdr template)))
     ;; Process the widget arguments to substitute bindings
-    ;; Also extract and process event handlers
+    ;; Also extract and process event handlers and face
     (let* ((processed-result (twidget--process-template-args-with-events 
                               rest bindings instance-id reactive-bindings))
            (processed-args (plist-get processed-result :args))
            (event-props (plist-get processed-result :event-props))
-           (rendered-text (twidget-parse (cons widget-name processed-args) bindings)))
+           (face-info (plist-get processed-result :face-info))
+           (rendered-text (twidget-parse (cons widget-name processed-args) bindings))
+           (result-text rendered-text))
       ;; Apply event properties to the rendered text
-      (if event-props
-          (twidget--apply-event-properties rendered-text event-props)
-        rendered-text))))
+      (when event-props
+        (setq result-text (twidget--apply-event-properties result-text event-props)))
+      ;; Apply face if specified
+      (when face-info
+        (let ((face (plist-get face-info :face))
+              (face-fn (plist-get face-info :face-fn))
+              (deps (plist-get face-info :deps)))
+          ;; Apply initial face
+          (when face
+            (setq result-text (propertize result-text 'face face)))
+          ;; If face is reactive, wrap with marker registration
+          (when face-fn
+            (setq result-text
+                  (twidget--wrap-reactive-face result-text face-fn instance-id deps)))))
+      result-text)))
 
 (defun twidget--process-template-args (args bindings instance-id)
   "Process template ARGS, substituting BINDINGS.
@@ -745,9 +878,11 @@ REACTIVE-BINDINGS is the original plist from :setup, used for event handlers.
 
 Returns a plist with:
   :args - the processed arguments (without event props)
-  :event-props - text properties for events (or nil)"
+  :event-props - text properties for events (or nil)
+  :face-info - face info plist (or nil)"
   (let ((result nil)
         (event-props nil)
+        (face-info nil)
         (has-for nil))
     ;; First pass: check if :for directive is present
     (let ((check-args args))
@@ -761,33 +896,40 @@ Returns a plist with:
         (cond
          ;; Keyword argument
          ((keywordp arg)
-          (let ((event-type (twidget--is-event-prop-p arg)))
-            (if event-type
-                ;; This is an event property - extract and compile
-                (progn
-                  (setq args (cdr args))
-                  (when args
-                    (let* ((handler-expr (car args))
-                           (compiled-props (twidget--process-event-prop 
-                                            event-type handler-expr reactive-bindings)))
-                      (when compiled-props
-                        (setq event-props (append event-props compiled-props))))
-                    (setq args (cdr args))))
-              ;; Regular keyword - keep as is
-              (push arg result)
+          (cond
+           ;; Event property (:on-click, etc.)
+           ((twidget--is-event-prop-p arg)
+            (let ((event-type (twidget--is-event-prop-p arg)))
               (setq args (cdr args))
               (when args
-                (if (eq arg :for)
-                    (push (car args) result)
-                  (push (twidget--process-template-arg (car args) bindings instance-id reactive-bindings) result))
-                (setq args (cdr args))))))
+                (let* ((handler-expr (car args))
+                       (compiled-props (twidget--process-event-prop 
+                                        event-type handler-expr reactive-bindings)))
+                  (when compiled-props
+                    (setq event-props (append event-props compiled-props))))
+                (setq args (cdr args)))))
+           ;; Face property
+           ((twidget--is-face-prop-p arg)
+            (setq args (cdr args))
+            (when args
+              (setq face-info (twidget--parse-face-expression (car args) reactive-bindings))
+              (setq args (cdr args))))
+           ;; Regular keyword - keep as is
+           (t
+            (push arg result)
+            (setq args (cdr args))
+            (when args
+              (if (eq arg :for)
+                  (push (car args) result)
+                (push (twidget--process-template-arg (car args) bindings instance-id reactive-bindings) result))
+              (setq args (cdr args))))))
          ;; Non-keyword (slot) arguments
          (t
           (if has-for
               (push arg result)
             (push (twidget--process-template-arg arg bindings instance-id reactive-bindings) result))
           (setq args (cdr args))))))
-    (list :args (nreverse result) :event-props event-props)))
+    (list :args (nreverse result) :event-props event-props :face-info face-info)))
 
 (defun twidget--process-template-arg (arg bindings instance-id &optional reactive-bindings)
   "Process a single template ARG with BINDINGS.
@@ -844,12 +986,13 @@ substitution."
 (defun twidget-clear-buffer-state ()
   "Clear all buffer-local widget state.
 This should be called before re-inserting widgets to ensure fresh state.
-Clears: widget instances, ref registry, reactive symbols, and text counter."
+Clears: widget instances, ref registry, reactive symbols, reactive faces, and text counter."
   (interactive)
   (clrhash twidget-instances)
   (clrhash twidget-ref-registry)
   (clrhash twidget-reactive-symbols)
-  (setq twidget-reactive-text-counter 0))
+  (setq twidget-reactive-text-counter 0)
+  (setq twidget-reactive-faces nil))
 
 (defun twidget-extract-variables (form)
   "Extract variable names referenced in :for directives from FORM.
@@ -904,11 +1047,42 @@ Example:
            (let ((bindings (list ,@(mapcar (lambda (var)
                                              `(cons ,(symbol-name var) ,var))
                                            vars))))
-             (insert (twidget-parse ',widget-form bindings)))))
+             (twidget--insert-with-reactive-faces
+              (twidget-parse ',widget-form bindings)))))
     ;; Runtime extraction (fallback) - cannot capture lexical variables
     `(progn
        (twidget-clear-buffer-state)
-       (insert (twidget-parse ,form nil)))))
+       (twidget--insert-with-reactive-faces
+        (twidget-parse ,form nil)))))
+
+(defun twidget--insert-with-reactive-faces (text)
+  "Insert TEXT and register any reactive face regions.
+Scans TEXT for twidget-reactive-face-id properties and registers
+them for reactive updates."
+  (let ((start (point)))
+    (insert text)
+    (let ((end (point)))
+      ;; Scan for reactive face markers
+      (save-excursion
+        (goto-char start)
+        (while (< (point) end)
+          (let ((face-fn (get-text-property (point) 'twidget-reactive-face-fn))
+                (instance-id (get-text-property (point) 'twidget-reactive-face-instance))
+                (deps (get-text-property (point) 'twidget-reactive-face-deps)))
+            (when face-fn
+              ;; Find the extent of this reactive face region
+              (let ((region-start (point))
+                    (region-end (next-single-property-change
+                                 (point) 'twidget-reactive-face-fn nil end)))
+                (setq region-end (or region-end end))
+                ;; Register the reactive face
+                (twidget--register-reactive-face region-start region-end
+                                                  face-fn instance-id deps)
+                (goto-char region-end)))
+            (unless face-fn
+              (goto-char (or (next-single-property-change
+                              (point) 'twidget-reactive-face-fn nil end)
+                             end)))))))))
 
 ;;; Reactive Data System
 ;; ============================================================================
@@ -1039,7 +1213,9 @@ SUB-VALUE is the new value for the specific property when ACCESSOR is provided."
       ;; Update symbols for the specific property path
       (dolist (sym property-symbols)
         (when (boundp sym)
-          (set sym (format "%s" sub-value)))))))
+          (set sym (format "%s" sub-value))))))
+  ;; Update reactive faces that depend on this variable
+  (twidget--update-reactive-faces var-name))
 
 (defun twidget-substitute-placeholders (str bindings)
   "Substitute {variable} placeholders in STR with values from BINDINGS.
