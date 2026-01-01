@@ -77,10 +77,24 @@ Twidget 事件系统是一个类似 Vue3 的声明式事件处理系统，允许
 | increment | `"count++"` | `(:type increment :var "count")` |
 | decrement | `"count--"` | `(:type decrement :var "count")` |
 | assignment | `"count=10"` | `(:type assignment :var "count" :value ...)` |
+| negation-assign | `"flag=!flag"` | `(:type assignment :var "flag" :value (:type negation ...))` |
 | ternary | `"flag ? a() : b()"` | `(:type ternary :condition "flag" ...)` |
 | logical-and | `"show && hide()"` | `(:type logical-and :condition "show" ...)` |
 | logical-or | `"show \|\| hide()"` | `(:type logical-or :condition "show" ...)` |
 | multi-statement | `"a++ ; b++"` | `(:type multi-statement :statements ...)` |
+
+### 值表达式解析器
+
+赋值表达式右侧支持的值类型：
+
+| 类型 | 示例 | 说明 |
+|------|------|------|
+| string | `"'hello'"` 或 `'"hello"'` | 字符串字面量 |
+| number | `"10"`, `"-3.14"` | 数字字面量 |
+| boolean | `"true"`, `"false"` | 布尔值 |
+| variable | `"count"` | 变量引用 |
+| negation | `"!flag"` | 逻辑非运算 |
+| ternary | `"a > b ? 1 : 0"` | 三元表达式 |
 
 ## 使用指南
 
@@ -170,7 +184,31 @@ Twidget 事件系统是一个类似 Vue3 的声明式事件处理系统，允许
               (span :on-click "flag ? showOn() : showOff()" "[Toggle]")))
 ```
 
-#### 7. 逻辑表达式
+#### 7. 逻辑非赋值（Toggle 模式）
+
+使用 `!variable` 语法来切换布尔值：
+
+```elisp
+(define-twidget toggle-switch
+  :setup (lambda (_props _slot)
+           (list :on (twidget-ref nil)
+                 :notify (lambda ()
+                           (message (if (twidget-get 'on) "ON!" "OFF!")))))
+  :template '(div
+              (span :on-click "on = !on ; notify()" "[Toggle: {on}]")))
+```
+
+更简洁的写法：
+
+```elisp
+(define-twidget simple-toggle
+  :setup (lambda (_props _slot)
+           (list :flag (twidget-ref t)))
+  :template '(div
+              (span :on-click "flag = !flag" "[{flag}]")))
+```
+
+#### 8. 逻辑表达式
 
 ```elisp
 (define-twidget conditional-action
@@ -181,7 +219,7 @@ Twidget 事件系统是一个类似 Vue3 的声明式事件处理系统，允许
               (span :on-click "enabled && doAction()" "[Do if enabled]")))
 ```
 
-#### 8. 复杂赋值表达式
+#### 9. 复杂赋值表达式
 
 ```elisp
 (define-twidget flip-counter

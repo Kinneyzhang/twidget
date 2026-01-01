@@ -1371,12 +1371,12 @@ Returns a plist describing the argument."
 Returns a plist describing the value."
   (let ((trimmed (string-trim value-str)))
     (cond
+     ;; Negation: !variable or !expression
+     ((string-match "^!\\s*\\(.+\\)$" trimmed)
+      (list :type 'negation :operand (twidget--parse-value-expr (match-string 1 trimmed))))
      ;; Ternary in assignment: count === 0 ? 1 : 0
-     ((string-match "^\\(.+?\\)\\s-*\\?\\s-*\\(.+?\\)\\s-*:\\s-*\\(.+\\)$" trimmed)
-      (list :type 'ternary
-            :condition (string-trim (match-string 1 trimmed))
-            :true-value (twidget--parse-value-expr (string-trim (match-string 2 trimmed)))
-            :false-value (twidget--parse-value-expr (string-trim (match-string 3 trimmed)))))
+     ;; Use the proper ternary parser
+     ((twidget--parse-ternary-value-expression trimmed))
      ;; String literal
      ((or (string-match "^\"\\(.*\\)\"$" trimmed)
           (string-match "^'\\(.*\\)'$" trimmed))
@@ -1395,6 +1395,49 @@ Returns a plist describing the value."
      ;; Expression
      (t
       (list :type 'expression :expr trimmed)))))
+
+(defun twidget--parse-ternary-value-expression (str)
+  "Parse STR as a ternary value expression (condition ? trueVal : falseVal).
+Returns a parsed ternary plist or nil if not a valid ternary expression.
+Similar to `twidget--parse-ternary-expression` but for value expressions."
+  (let ((question-pos nil)
+        (colon-pos nil)
+        (paren-depth 0)
+        (i 0)
+        (len (length str)))
+    ;; Find the first top-level ? (not inside parentheses)
+    (while (and (< i len) (not question-pos))
+      (let ((char (aref str i)))
+        (cond
+         ((= char ?\() (cl-incf paren-depth))
+         ((= char ?\)) (cl-decf paren-depth))
+         ((and (= char ??) (= paren-depth 0))
+          (setq question-pos i))))
+      (cl-incf i))
+    ;; If we found a ?, look for the matching : after it
+    (when question-pos
+      (setq i (1+ question-pos))
+      (setq paren-depth 0)
+      (while (and (< i len) (not colon-pos))
+        (let ((char (aref str i)))
+          (cond
+           ((= char ?\() (cl-incf paren-depth))
+           ((= char ?\)) (cl-decf paren-depth))
+           ((and (= char ?:) (= paren-depth 0))
+            (setq colon-pos i))))
+        (cl-incf i)))
+    ;; If we found both ? and :, extract the parts
+    (when (and question-pos colon-pos (> colon-pos question-pos))
+      (let ((condition (string-trim (substring str 0 question-pos)))
+            (true-val (string-trim (substring str (1+ question-pos) colon-pos)))
+            (false-val (string-trim (substring str (1+ colon-pos)))))
+        (when (and (not (string-empty-p condition))
+                   (not (string-empty-p true-val))
+                   (not (string-empty-p false-val)))
+          (list :type 'ternary
+                :condition condition
+                :true-value (twidget--parse-value-expr true-val)
+                :false-value (twidget--parse-value-expr false-val)))))))
 
 (defun twidget--compile-event-handler (parsed-expr bindings-plist)
   "Compile PARSED-EXPR into an executable lambda.
@@ -1527,6 +1570,9 @@ Returns a lambda function that can be used as an event handler."
       ('number (plist-get value-parsed :value))
       ('boolean (plist-get value-parsed :value))
       ('event-ref nil) ; $event would need special handling
+      ('negation
+       (let ((operand (plist-get value-parsed :operand)))
+         (not (twidget--resolve-value operand bindings-plist))))
       ('variable
        (let* ((var-name (plist-get value-parsed :name))
               (var-key (intern (format ":%s" var-name)))
