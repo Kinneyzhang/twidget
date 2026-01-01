@@ -127,45 +127,61 @@ When the value changes, the UI will be updated automatically."
   "Counter for generating unique reactive text IDs.")
 
 (defun twidget--parse-dot-notation (var-expr)
-  "Parse VAR-EXPR with dot notation like \"info.name\" or \"items.0\".
-Returns a cons cell (BASE-VAR . ACCESSOR) where:
+  "Parse VAR-EXPR with dot notation like \"info.name\", \"items.0\", or \"data.0.name\".
+Returns a cons cell (BASE-VAR . ACCESSORS) where:
   - BASE-VAR is the base variable name (string)
-  - ACCESSOR is nil for simple vars, a keyword for plist access, or an integer for list access.
+  - ACCESSORS is a list of accessors (can be empty for simple vars).
+    Each accessor is a keyword for plist access or an integer for list access.
 Examples:
-  \"count\" -> (\"count\" . nil)
-  \"info.name\" -> (\"info\" . :name)
-  \"items.0\" -> (\"items\" . 0)"
+  \"count\" -> (\"count\")
+  \"info.name\" -> (\"info\" :name)
+  \"items.0\" -> (\"items\" 0)
+  \"data.0.name\" -> (\"data\" 0 :name)"
   (save-match-data
-    (if (string-match "^\\([^.]+\\)\\.\\(.+\\)$" var-expr)
-        (let ((base-var (match-string 1 var-expr))
-              (accessor-str (match-string 2 var-expr)))
-          ;; Check if accessor is a number (list index) or a string (plist key)
-          (if (string-match "^[0-9]+$" accessor-str)
-              (cons base-var (string-to-number accessor-str))
-            (cons base-var (intern (format ":%s" accessor-str)))))
-      ;; No dot notation - simple variable
-      (cons var-expr nil))))
+    (let ((parts (split-string var-expr "\\." t)))
+      (if (= (length parts) 1)
+          ;; No dot notation - simple variable, return list with just the base var
+          (list var-expr)
+        ;; Has dot notation - first part is base var, rest are accessors
+        (let ((base-var (car parts))
+              (accessor-strs (cdr parts))
+              (accessors nil))
+          (dolist (acc-str accessor-strs)
+            (push (if (string-match "^[0-9]+$" acc-str)
+                      (string-to-number acc-str)
+                    (intern (format ":%s" acc-str)))
+                  accessors))
+          (cons base-var (nreverse accessors)))))))
 
-(defun twidget--get-nested-value (value accessor)
-  "Get the nested VALUE using ACCESSOR.
-ACCESSOR is nil (return whole value), a keyword (plist access), or an integer (list access).
-Throws an error if the accessor is out of bounds for lists."
-  (cond
-   ((null accessor) value)
-   ((keywordp accessor)
-    (if (plistp value)
-        (plist-get value accessor)
-      (error "Cannot use keyword access on non-plist value")))
-   ((integerp accessor)
-    (cond
-     ((not (listp value))
-      (error "Cannot use index access on non-list value"))
-     ((null value)
-      (error "Cannot access index %d of empty list" accessor))
-     ((or (< accessor 0) (>= accessor (length value)))
-      (error "Index %d out of bounds for list of length %d" accessor (length value)))
-     (t (nth accessor value))))
-   (t value)))
+(defun twidget--get-nested-value (value accessors)
+  "Get the nested VALUE using ACCESSORS.
+ACCESSORS is a list of accessors, each being a keyword (plist access) or an integer (list access).
+Throws an error if the accessor is out of bounds for lists.
+Examples:
+  (twidget--get-nested-value data \\='()) -> data
+  (twidget--get-nested-value info \\='(:name)) -> (plist-get info :name)
+  (twidget--get-nested-value items \\='(0)) -> (nth 0 items)
+  (twidget--get-nested-value data \\='(0 :name)) -> (plist-get (nth 0 data) :name)"
+  (if (null accessors)
+      value
+    (let ((current value))
+      (dolist (accessor accessors)
+        (cond
+         ((keywordp accessor)
+          (if (plistp current)
+              (setq current (plist-get current accessor))
+            (error "Cannot use keyword access on non-plist value")))
+         ((integerp accessor)
+          (cond
+           ((not (listp current))
+            (error "Cannot use index access on non-list value"))
+           ((null current)
+            (error "Cannot access index %d of empty list" accessor))
+           ((or (< accessor 0) (>= accessor (length current)))
+            (error "Index %d out of bounds for list of length %d" accessor (length current)))
+           (t (setq current (nth accessor current)))))
+         (t nil))) ; Unknown accessor type, ignore
+      current)))
 
 (defun twidget--apply-reactive-text (text instance-id var-name)
   "Apply reactive tracking to TEXT for INSTANCE-ID with VAR-NAME.
@@ -636,10 +652,10 @@ Supports dot notation for nested access:
       (let* ((match-start (match-beginning 0))
              (match-end (match-end 0))
              (var-expr (match-string 1 str))
-             ;; Parse dot notation: "info.name" -> ("info" . :name)
+             ;; Parse dot notation: "data.0.name" -> ("data" 0 :name)
              (parsed (twidget--parse-dot-notation var-expr))
              (base-var (car parsed))
-             (accessor (cdr parsed))
+             (accessors (cdr parsed))
              (binding (assoc base-var bindings))
              ;; Check if base variable is a reactive ref
              (ref-info (gethash (cons instance-id base-var) twidget-ref-registry)))
@@ -648,8 +664,8 @@ Supports dot notation for nested access:
         ;; Add the placeholder value (with reactive tracking if it's a ref)
         (if binding
             (let* ((base-value (cdr binding))
-                   ;; Get nested value if accessor is present
-                   (actual-value (twidget--get-nested-value base-value accessor))
+                   ;; Get nested value using accessors
+                   (actual-value (twidget--get-nested-value base-value accessors))
                    (value-str (format "%s" actual-value)))
               (if ref-info
                   ;; This is a reactive ref - apply reactive text tracking
@@ -676,21 +692,38 @@ INSTANCE-ID is used for reactive tracking."
 (defun twidget--process-template-args (args bindings instance-id)
   "Process template ARGS, substituting BINDINGS.
 INSTANCE-ID is used for reactive tracking.
-Returns the processed argument list."
-  (let ((result nil))
+Returns the processed argument list.
+Note: When :for directive is present, slot arguments (non-keyword args) are NOT processed
+here because they contain placeholders that will be bound during :for iteration."
+  (let ((result nil)
+        (has-for nil))
+    ;; First pass: check if :for directive is present
+    (let ((check-args args))
+      (while (and check-args (keywordp (car check-args)))
+        (when (eq (car check-args) :for)
+          (setq has-for t))
+        (setq check-args (cddr check-args))))
+    ;; Second pass: process arguments
     (while args
       (let ((arg (car args)))
         (cond
-         ;; Keyword - keep as is, process next arg
+         ;; Keyword - keep as is, process next arg (unless it's the :for value)
          ((keywordp arg)
           (push arg result)
           (setq args (cdr args))
           (when args
-            (push (twidget--process-template-arg (car args) bindings instance-id) result)
+            (if (eq arg :for)
+                ;; :for value should be kept as-is (it's not a template string)
+                (push (car args) result)
+              (push (twidget--process-template-arg (car args) bindings instance-id) result))
             (setq args (cdr args))))
-         ;; Other - process and add
+         ;; Non-keyword (slot) arguments
          (t
-          (push (twidget--process-template-arg arg bindings instance-id) result)
+          (if has-for
+              ;; When :for is present, keep slot args as-is for later processing
+              (push arg result)
+            ;; No :for, process normally
+            (push (twidget--process-template-arg arg bindings instance-id) result))
           (setq args (cdr args))))))
     (nreverse result)))
 
@@ -950,21 +983,22 @@ SUB-VALUE is the new value for the specific property when ACCESSOR is provided."
 BINDINGS is an alist of (VAR-NAME . VALUE) pairs.
 Supports dot notation for nested access:
   {info.name} - plist property access
-  {items.0} - list index access"
+  {items.0} - list index access
+  {data.0.name} - multi-level access"
   (if (stringp str)
       (replace-regexp-in-string
        "{\\([^}]+\\)}"
        (lambda (match)
          ;; Extract the variable expression from the first capture group
          (let* ((var-expr (match-string 1 match))
-                ;; Parse dot notation
+                ;; Parse dot notation: "data.0.name" -> ("data" 0 :name)
                 (parsed (twidget--parse-dot-notation var-expr))
                 (base-var (car parsed))
-                (accessor (cdr parsed))
+                (accessors (cdr parsed))
                 (binding (assoc base-var bindings)))
            (if binding
                (let* ((base-value (cdr binding))
-                      (actual-value (twidget--get-nested-value base-value accessor)))
+                      (actual-value (twidget--get-nested-value base-value accessors)))
                  (format "%s" actual-value))
              match)))
        str t t)
