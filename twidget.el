@@ -1202,6 +1202,49 @@ Examples:
       (setq result (twidget--parse-single-statement trimmed))))
     result))
 
+(defun twidget--parse-ternary-expression (str)
+  "Parse STR as a ternary expression (condition ? trueExpr : falseExpr).
+Returns a parsed ternary plist or nil if not a valid ternary expression.
+Handles nested parentheses correctly."
+  (let ((question-pos nil)
+        (colon-pos nil)
+        (paren-depth 0)
+        (i 0)
+        (len (length str)))
+    ;; Find the first top-level ? (not inside parentheses)
+    (while (and (< i len) (not question-pos))
+      (let ((char (aref str i)))
+        (cond
+         ((= char ?\() (cl-incf paren-depth))
+         ((= char ?\)) (cl-decf paren-depth))
+         ((and (= char ??) (= paren-depth 0))
+          (setq question-pos i))))
+      (cl-incf i))
+    ;; If we found a ?, look for the matching : after it
+    (when question-pos
+      (setq i (1+ question-pos))
+      (setq paren-depth 0)
+      (while (and (< i len) (not colon-pos))
+        (let ((char (aref str i)))
+          (cond
+           ((= char ?\() (cl-incf paren-depth))
+           ((= char ?\)) (cl-decf paren-depth))
+           ((and (= char ?:) (= paren-depth 0))
+            (setq colon-pos i))))
+        (cl-incf i)))
+    ;; If we found both ? and :, extract the parts
+    (when (and question-pos colon-pos (> colon-pos question-pos))
+      (let ((condition (string-trim (substring str 0 question-pos)))
+            (true-expr (string-trim (substring str (1+ question-pos) colon-pos)))
+            (false-expr (string-trim (substring str (1+ colon-pos)))))
+        (when (and (not (string-empty-p condition))
+                   (not (string-empty-p true-expr))
+                   (not (string-empty-p false-expr)))
+          (list :type 'ternary
+                :condition condition
+                :true-expr (twidget--parse-single-statement true-expr)
+                :false-expr (twidget--parse-single-statement false-expr)))))))
+
 (defun twidget--parse-single-statement (stmt)
   "Parse a single statement STMT.
 Returns a plist describing the statement."
@@ -1224,11 +1267,8 @@ Returns a plist describing the statement."
         (list :type 'assignment :var var :value (twidget--parse-value-expr value-str))))
 
      ;; Ternary: condition ? trueExpr : falseExpr
-     ((string-match "^\\(.+?\\)\\s-*\\?\\s-*\\(.+?\\)\\s-*:\\s-*\\(.+\\)$" trimmed)
-      (list :type 'ternary
-            :condition (string-trim (match-string 1 trimmed))
-            :true-expr (twidget--parse-single-statement (string-trim (match-string 2 trimmed)))
-            :false-expr (twidget--parse-single-statement (string-trim (match-string 3 trimmed)))))
+     ;; Use a custom parser to handle nested parentheses correctly
+     ((twidget--parse-ternary-expression trimmed))
 
      ;; Logical AND: expr && action
      ((string-match "^\\(.+?\\)\\s-*&&\\s-*\\(.+\\)$" trimmed)
