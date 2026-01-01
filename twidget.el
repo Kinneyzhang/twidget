@@ -1743,6 +1743,19 @@ symbols, file operations, etc. are NOT available in the evaluation context."
                          (format "%S" actual-value))
                        result-expr))))))
         (setq plist (cddr plist))))
+    ;; Convert JavaScript-style negation !value to Elisp (not value)
+    ;; Handle patterns like !nil, !t, !'string', !123, !(expr)
+    (while (string-match "!\\([^!]\\)" result-expr)
+      (let* ((start (match-beginning 0))
+             (rest-start (match-beginning 1))
+             ;; Find the extent of the operand
+             (operand-end (twidget--find-operand-end result-expr rest-start)))
+        (when operand-end
+          (let ((operand (substring result-expr rest-start operand-end)))
+            (setq result-expr
+                  (concat (substring result-expr 0 start)
+                          (format "(not %s)" operand)
+                          (substring result-expr operand-end)))))))
     ;; Evaluate the transformed expression in restricted environment
     (condition-case err
         (eval (car (read-from-string (format "(progn %s)" result-expr)))
@@ -1750,6 +1763,45 @@ symbols, file operations, etc. are NOT available in the evaluation context."
       (error
        (message "twidget: Error evaluating expression '%s': %s" expr-str err)
        nil))))
+
+(defun twidget--find-operand-end (str start)
+  "Find the end position of an operand in STR starting at START.
+Handles atoms (symbols, numbers, strings) and parenthesized expressions."
+  (let ((len (length str))
+        (i start))
+    (when (< i len)
+      (let ((char (aref str i)))
+        (cond
+         ;; Parenthesized expression
+         ((= char ?\()
+          (let ((depth 1))
+            (cl-incf i)
+            (while (and (< i len) (> depth 0))
+              (let ((c (aref str i)))
+                (cond
+                 ((= c ?\() (cl-incf depth))
+                 ((= c ?\)) (cl-decf depth))))
+              (cl-incf i))
+            i))
+         ;; String literal
+         ((or (= char ?\") (= char ?\'))
+          (let ((quote-char char))
+            (cl-incf i)
+            (while (and (< i len) (not (= (aref str i) quote-char)))
+              (cl-incf i))
+            (when (< i len) (cl-incf i))
+            i))
+         ;; Symbol or number (word characters)
+         (t
+          (while (and (< i len)
+                      (let ((c (aref str i)))
+                        (or (and (>= c ?a) (<= c ?z))
+                            (and (>= c ?A) (<= c ?Z))
+                            (and (>= c ?0) (<= c ?9))
+                            (= c ?_)
+                            (= c ?-))))
+            (cl-incf i))
+          i)))))))
 
 (defun twidget--create-click-handler (handler-fn)
   "Create a keymap with HANDLER-FN bound to mouse click.
