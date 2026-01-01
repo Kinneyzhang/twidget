@@ -596,6 +596,7 @@ Returns the rendered string with text properties applied."
             (collected-named-slots nil)
             (slot-parts nil)
             (for-expr nil)
+            (tp-props-value nil)  ; Store :tp-props value
             (local-bindings (copy-alist bindings)))
         ;; Parse keyword arguments first
         (while (and args (keywordp (car args)))
@@ -605,6 +606,9 @@ Returns the rendered string with text properties applied."
              ;; Handle :for directive
              ((eq key :for)
               (setq for-expr val))
+             ;; Handle :tp-props specially
+             ((eq key :tp-props)
+              (setq tp-props-value val))
              ;; Regular prop
              (t (push (cons key val) collected-props)))
             (setq args (cddr args))))
@@ -688,16 +692,22 @@ Ignoring arguments: %S" widget-name args)))
                                  (twidget-prop-default prop-def)))))))
         ;; Check if this is a composite widget (has :setup and :template)
         (let ((setup-fn (plist-get definition :setup))
-              (template (plist-get definition :template)))
-          (if (and setup-fn template)
-              ;; Composite widget: call setup, expand template, and render
-              (twidget--render-composite setup-fn template parsed-props slot-value)
-            ;; Simple widget: call the render function
-            (if extends
-                ;; With inheritance, pass parent-render as third argument
-                (funcall render-fn parsed-props slot-value parent-render-fn)
-              ;; Normal render call
-              (funcall render-fn parsed-props slot-value))))))))
+              (template (plist-get definition :template))
+              (rendered-result nil))
+          (setq rendered-result
+                (if (and setup-fn template)
+                    ;; Composite widget: call setup, expand template, and render
+                    (twidget--render-composite setup-fn template parsed-props slot-value)
+                  ;; Simple widget: call the render function
+                  (if extends
+                      ;; With inheritance, pass parent-render as third argument
+                      (funcall render-fn parsed-props slot-value parent-render-fn)
+                    ;; Normal render call
+                    (funcall render-fn parsed-props slot-value))))
+          ;; Apply :tp-props if specified
+          (when tp-props-value
+            (setq rendered-result (twidget--apply-static-tp-props rendered-result tp-props-value)))
+          rendered-result)))))
 
 (defun twidget--render-composite (setup-fn template props slot)
   "Render a composite widget using SETUP-FN and TEMPLATE.
