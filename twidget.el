@@ -180,7 +180,7 @@ Examples:
            ((or (< accessor 0) (>= accessor (length current)))
             (error "Index %d out of bounds for list of length %d" accessor (length current)))
            (t (setq current (nth accessor current)))))
-         (t nil))) ; Unknown accessor type, ignore
+         (t (warn "twidget--get-nested-value: Unknown accessor type: %S" accessor))))
       current)))
 
 (defun twidget--apply-reactive-text (text instance-id var-name)
