@@ -126,7 +126,7 @@
 
 ;; pre - Preformatted code block.  Preserves whitespace and uses monospace font.
 ;; Props: :bgcolor - Background color (default: light gray)
-(define-twidget pre=== 
+(define-twidget pre
   :type 'inline
   :slot t
   :props '((palette . org-code))
@@ -327,7 +327,7 @@
                    (fgcolor (plist-get props :fgcolor))
                    (ul (plist-get props :underline))
                    (face `(:foreground ,fgcolor
-                           :underline ,(if ul t nil)))
+                                       :underline ,(if ul t nil)))
                    (keymap (make-sparse-keymap))
                    (handler (or action
                                 (when url
@@ -344,41 +344,31 @@
 
 ;; button - Interactive button with configurable style.
 ;; Props: :action, :bgcolor, :fgcolor, :type (primary/secondary/success/danger/warning), :padding
-(define-twidget button
-  :type 'inline
-  :slot t
-  :props '((action . nil)
-           (bgcolor . nil)
-           (fgcolor . nil)
-           (type . "primary")
-           (padding . 1))
-  :render (lambda (props slot)
-            (let* ((action (plist-get props :action))
-                   (btn-type (plist-get props :type))
-                   (padding (plist-get props :padding))
-                   (pad-str (make-string padding ?\s))
-                   ;; Type-based colors
-                   (type-colors (pcase btn-type
-                                  ("primary" '("#007bff" . "#ffffff"))
-                                  ("secondary" '("#6c757d" . "#ffffff"))
-                                  ("success" '("#28a745" . "#ffffff"))
-                                  ("danger" '("#dc3545" . "#ffffff"))
-                                  ("warning" '("#ffc107" . "#000000"))
-                                  ("info" '("#17a2b8" . "#ffffff"))
-                                  (_ '("#007bff" . "#ffffff"))))
-                   (bgcolor (or (plist-get props :bgcolor) (car type-colors)))
-                   (fgcolor (or (plist-get props :fgcolor) (cdr type-colors)))
-                   (face `(:background ,bgcolor :foreground ,fgcolor
-                           :box (:line-width -1 :style released-button)))
-                   (btn-text (format "%s%s%s" pad-str slot pad-str))
-                   (keymap (make-sparse-keymap)))
-              (when action
-                (define-key keymap [mouse-1] action)
-                (define-key keymap (kbd "RET") action))
-              (propertize (tp-set btn-text 'face face)
-                          'keymap keymap
-                          'mouse-face 'highlight
-                          'cursor 'hand))))
+;; (define-twidget button
+;;   :type 'inline
+;;   :slot t
+;;   :props '((action . nil)
+;;            (type . "primary")
+;;            (padding . 1))
+;;   :render (lambda (props slot)
+;;             (let* ((action (plist-get props :action))
+;;                    (btn-type (plist-get props :type))
+;;                    (padding (plist-get props :padding))
+;;                    (pad-str (make-string padding ?\s))
+;;                    (bgcolor (or (plist-get props :bgcolor) (car type-colors)))
+;;                    (fgcolor (or (plist-get props :fgcolor) (cdr type-colors)))
+;;                    (face `( :background ,bgcolor
+;;                             :foreground ,fgcolor
+;;                             :box (:line-width -1 :style released-button)))
+;;                    (btn-text (format "%s%s%s" pad-str slot pad-str))
+;;                    (keymap (make-sparse-keymap)))
+;;               (when action
+;;                 (define-key keymap [mouse-1] action)
+;;                 (define-key keymap (kbd "RET") action))
+;;               (propertize (tp-set btn-text 'face face)
+;;                           'keymap keymap
+;;                           'mouse-face 'highlight
+;;                           'cursor 'hand))))
 
 ;; ============================================================================
 ;; Section 7: Badge and Alert Components
