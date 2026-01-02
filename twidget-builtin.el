@@ -100,14 +100,14 @@
             (tp-set slot 'face 'italic)))
 
 ;; underline - Underlined text.
-(define-twidget underline
+(define-twidget u
   :type 'inline
   :slot t
   :render (lambda (_props slot)
             (tp-set slot 'face 'underline)))
 
 ;; strike - Strikethrough text.
-(define-twidget strike
+(define-twidget del
   :type 'inline
   :slot t
   :render (lambda (_props slot)
@@ -118,58 +118,58 @@
 (define-twidget code
   :type 'inline
   :slot t
-  :props '((bgcolor . "#f0f0f0"))
+  :props '((palette . org-code))
   :render (lambda (props slot)
-            (let ((bgcolor (plist-get props :bgcolor)))
-              (tp-set (concat "`" slot "`")
-                      'face `(:family "monospace" :background ,bgcolor)))))
+            (tp-set slot
+                    'tp-palette (plist-get props :palette)
+                    'face `(:family "monospace"))))
 
 ;; pre - Preformatted code block.  Preserves whitespace and uses monospace font.
 ;; Props: :bgcolor - Background color (default: light gray)
-(define-twidget pre
-  :type 'block
+(define-twidget pre=== 
+  :type 'inline
   :slot t
-  :props '((bgcolor . "#f5f5f5"))
+  :props '((palette . org-code))
   :render (lambda (props slot)
-            (let ((bgcolor (plist-get props :bgcolor)))
-              (tp-set slot 'face `(:family "monospace" :background ,bgcolor)))))
+            (tp-set slot
+                    'tp-palette (plist-get props :palette)
+                    'face `(:family "monospace" :box nil))))
 
 ;; blockquote - Block quotation.  Indents content with a vertical bar prefix.
 ;; Props: :prefix - Quote prefix (default: "│ "), :fgcolor - Foreground color
 (define-twidget blockquote
   :type 'block
   :slot t
-  :props '((prefix . "│ ")
-           (fgcolor . "#666666"))
+  :props '((prefix . "│") (palette . org-quote))
   :render (lambda (props slot)
-            (let ((prefix (plist-get props :prefix))
-                  (fgcolor (plist-get props :fgcolor)))
-              (tp-set (concat prefix slot)
-                      'face `(:foreground ,fgcolor)))))
+            (let* ((palette (plist-get props :palette))
+                   (fgcolor (tp-palette-fg-color palette))
+                   (prefix (tp-set (plist-get props :prefix)
+                                   'tp-fg fgcolor)))
+              (tp-set slot
+                      'line-prefix prefix
+                      'wrap-prefix prefix
+                      'tp-palette palette
+                      'face '(:box nil)))))
 
 ;; mark - Highlighted/marked text with background color.
 ;; Props: :bgcolor - Highlight background color (default: yellow)
 (define-twidget mark
   :type 'inline
   :slot t
-  :props '((bgcolor . "#ffff00"))
+  :props '((palette . search-match))
   :render (lambda (props slot)
-            (let ((bgcolor (plist-get props :bgcolor)))
-              (tp-set slot 'face `(:background ,bgcolor)))))
+            (let ((palette (plist-get props :palette)))
+              (tp-set slot 'tp-bg (tp-palette-bg-color palette)))))
 
 ;; kbd - Keyboard key representation.  Styled to look like a keyboard key.
 ;; Props: :bgcolor, :border-color
 (define-twidget kbd
   :type 'inline
   :slot t
-  :props '((bgcolor . "#eeeeee")
-           (border-color . "#999999"))
+  :props '((palette . org-tag))
   :render (lambda (props slot)
-            (let ((bgcolor (plist-get props :bgcolor))
-                  (border-color (plist-get props :border-color)))
-              (tp-set (format " %s " slot)
-                      'face `(:background ,bgcolor
-                              :box (:line-width -1 :color ,border-color))))))
+            (tp-set slot 'tp-palette (plist-get props :palette))))
 
 ;; small - Small text.  Reduces text height.
 ;; Props: :height - Text height multiplier (default: 0.85)
@@ -251,10 +251,12 @@
 ;; Props: :width - Width in characters, :char - Character for the rule
 (define-twidget hr
   :type 'block
-  :props '((width . 40)
+  :props '((width . nil)
            (char . "─"))
   :render (lambda (props _slot)
-            (let ((width (plist-get props :width))
+            (let ((width
+                   (or (plist-get props :width)
+                       (1- (window-body-width))))
                   (char (plist-get props :char)))
               (make-string width (string-to-char char)))))
 
