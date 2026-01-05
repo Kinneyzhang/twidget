@@ -1060,6 +1060,7 @@ Block element handling follows HTML-like rules:
   (if (and (= (length args) 1)
            (not (stringp (car args)))
            (not (and (listp (car args))
+                     (car args)  ; non-empty list
                      (symbolp (caar args))
                      (assoc (caar args) twidget-alist))))
       (twidget-process-slot-value (car args) bindings)

@@ -191,7 +191,9 @@
             (tp-set (funcall parent-render props slot) 'face 'bold)))
 
 ;; br - Line break.  Inserts a newline character.
-;; Slot can be used to specify the number of line breaks (default: 1)
+;; Slot: Optional number of line breaks (default: 1).
+;;   Accepts: number, string representation of a number, or nil.
+;;   Examples: (br), (br 3), (br "2")
 (define-twidget br
   :render (lambda (_props slot)
             (let ((num (cond
