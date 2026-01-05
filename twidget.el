@@ -331,9 +331,9 @@ There are two ways to define a widget:
               - A symbol: required property accessed via keyword
               - A cons cell (SYMBOL . DEFAULT): property with default value
      :slot  - Boolean value or list of slot names.
-              nil (default) means widget does not support slot.
-              t means widget supports a single default slot.
-              A list of symbols defines named slots.
+              t (default) means widget supports a single default slot.
+              nil means widget does not support slot.
+              A list of symbols defines named slots, e.g., \\='(header content footer).
      :slots - Alias for :slot with named slots (for clarity)
      :type  - Widget display type (symbol).
               \\='inline (default) - Inline element, no automatic line breaks.
@@ -439,7 +439,7 @@ TEMPLATE is a template sexp (for composite widgets)."
   ;; Handle inheritance if :extends is specified
   (let* ((slot-was-specified (not (eq slot :twidget--unspecified)))
          (type-was-specified (not (eq type :twidget--unspecified)))
-         (final-slot (if slot-was-specified slot nil))
+         (final-slot (if slot-was-specified slot t))  ; Default to t (slot supported)
          (final-type (if type-was-specified type 'inline))  ; Default to 'inline
          (final-props props)
          (parent-render nil))
@@ -814,7 +814,9 @@ Block element handling follows HTML-like rules:
              (is-first (= i 0))
              (is-last (= i (1- len)))
              (is-block (twidget-is-block-widget-p form))
-             (rendered (twidget--expand-template form bindings instance-id reactive-bindings)))
+             (rendered-val (twidget--expand-template form bindings instance-id reactive-bindings))
+             ;; Convert to string for concatenation if needed
+             (rendered (if (stringp rendered-val) rendered-val (format "%s" rendered-val))))
         ;; Add newline BEFORE block element if there's previous content
         ;; (Block elements start on a new line)
         (when (and is-block (not is-first) (not (string-empty-p result)))
@@ -1029,7 +1031,8 @@ REACTIVE-BINDINGS is the original plist from :setup, used for event handlers."
 (defun twidget-process-slot-value (val &optional bindings)
   "Process a single slot VAL, recursively parsing widget forms.
 BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
-substitution."
+substitution.
+Preserves original type for non-string, non-widget values."
   (cond
    ((stringp val)
     (twidget-substitute-placeholders val bindings))
@@ -1037,36 +1040,53 @@ substitution."
          (symbolp (car val))
          (assoc (car val) twidget-alist))
     (twidget-parse val bindings))
-   (t (format "%s" val))))
+   ;; Preserve original type for primitives (numbers, symbols, etc.)
+   (t val)))
 
 (defun twidget-process-slot-args (args &optional bindings)
-  "Process multiple slot ARGS into a single concatenated string.
+  "Process multiple slot ARGS into slot content.
 BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
 substitution.
+
+If there is only one slot argument and it's a primitive type (not a string
+or widget form), the original type is preserved. Otherwise, all slot values
+are concatenated into a string.
 
 Block element handling follows HTML-like rules:
 - Block elements start on a new line (newline added before if preceded by content)
 - Block elements are followed by a newline (when followed by other content)
 - Inline elements flow together without automatic newlines"
-  (let ((result "")
-        (len (length args)))
-    (dotimes (i len)
-      (let* ((slot-item (nth i args))
-             (is-first (= i 0))
-             (is-last (= i (1- len)))
-             (is-block (twidget-is-block-widget-p slot-item))
-             (rendered (twidget-process-slot-value slot-item bindings)))
-        ;; Add newline BEFORE block element if there's previous content
-        (when (and is-block (not is-first) (not (string-empty-p result)))
-          (unless (string-suffix-p "\n" result)
-            (setq result (concat result "\n"))))
-        ;; Append the rendered content
-        (setq result (concat result rendered))
-        ;; Add newline AFTER block element if not the last element
-        (when (and is-block (not is-last))
-          (unless (string-suffix-p "\n" result)
-            (setq result (concat result "\n"))))))
-    result))
+  ;; Special case: single non-string primitive value - preserve type
+  (if (and (= (length args) 1)
+           (not (stringp (car args)))
+           (not (and (listp (car args))
+                     (symbolp (caar args))
+                     (assoc (caar args) twidget-alist))))
+      (twidget-process-slot-value (car args) bindings)
+    ;; Multiple arguments or string(s) - concatenate as strings
+    (let ((result "")
+          (len (length args)))
+      (dotimes (i len)
+        (let* ((slot-item (nth i args))
+               (is-first (= i 0))
+               (is-last (= i (1- len)))
+               (is-block (twidget-is-block-widget-p slot-item))
+               (rendered-val (twidget-process-slot-value slot-item bindings))
+               ;; Convert to string for concatenation if needed
+               (rendered (if (stringp rendered-val)
+                             rendered-val
+                           (format "%s" rendered-val))))
+          ;; Add newline BEFORE block element if there's previous content
+          (when (and is-block (not is-first) (not (string-empty-p result)))
+            (unless (string-suffix-p "\n" result)
+              (setq result (concat result "\n"))))
+          ;; Append the rendered content
+          (setq result (concat result rendered))
+          ;; Add newline AFTER block element if not the last element
+          (when (and is-block (not is-last))
+            (unless (string-suffix-p "\n" result)
+              (setq result (concat result "\n"))))))
+      result)))
 
 (defun twidget-reset ()
   "Reset all widget definitions."

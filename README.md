@@ -191,7 +191,7 @@ For widgets that directly produce output, use `:render`:
 ```elisp
 (define-twidget my-text
   :props '((color . "black"))    ; Property with default value
-  :slot t                         ; Accept slot content
+  ;; :slot t is the default, so it's optional
   :render (lambda (props slot)
             ;; props: plist of properties (:color "black")
             ;; slot: the content passed to the widget
@@ -255,13 +255,13 @@ Properties define the configurable aspects of your widget:
 
 ### Slot System
 
-Slots allow you to pass content into widgets:
+Slots allow you to pass content into widgets. By default, widgets support a single slot (`:slot t`).
 
-#### Single Slot
+#### Single Slot (Default)
 
 ```elisp
 (define-twidget wrapper
-  :slot t    ; Enable single slot
+  ;; :slot t is the default, widgets accept slot content by default
   :render (lambda (_props slot)
             (concat "<<< " slot " >>>")))
 
@@ -269,11 +269,20 @@ Slots allow you to pass content into widgets:
 ;; => "<<< Hello >>>"
 ```
 
+#### No Slot
+
+```elisp
+(define-twidget hr
+  :slot nil    ; Explicitly disable slot
+  :render (lambda (_props _slot)
+            (make-string 40 ?─)))
+```
+
 #### Named Slots
 
 ```elisp
 (define-twidget card
-  :slots '(header content footer)
+  :slot '(header content footer)
   :render (lambda (_props slots)
             (concat
              "╭────────────────────╮\n"
@@ -290,6 +299,23 @@ Slots allow you to pass content into widgets:
    (slot-header "My Card Title")
    (slot-content "This is the main content.")
    (slot-footer "Footer information")))
+```
+
+#### Slot Type Preservation
+
+When a single non-string value is passed to a slot, its original type is preserved:
+
+```elisp
+(define-twidget repeat-char
+  :props '((char . "*"))
+  :render (lambda (props slot)
+            ;; slot can be a number, not just a string
+            (let ((count (if (numberp slot) slot (string-to-number slot))))
+              (make-string count (string-to-char (plist-get props :char))))))
+
+;; Usage with number - type is preserved
+(twidget-parse '(repeat-char 5))
+;; => "*****"
 ```
 
 ### Widget Inheritance
@@ -557,7 +583,7 @@ Define a text widget named NAME.
 | Keyword | Description |
 |---------|-------------|
 | `:props` | Property definitions: symbol (required) or `(symbol . default)` |
-| `:slot` | `nil` (no slot), `t` (single slot), or `'(name1 name2 ...)` |
+| `:slot` | `t` (default, single slot), `nil` (no slot), or `'(name1 name2 ...)` for named slots |
 | `:slots` | Alias for `:slot` with named slots |
 | `:extends` | Parent widget symbol to inherit from |
 | `:render` | Render function for simple widgets |

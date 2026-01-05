@@ -191,7 +191,7 @@ twidget 支持两种定义组件的方式：
 ```elisp
 (define-twidget my-text
   :props '((color . "black"))    ; 带默认值的属性
-  :slot t                         ; 接受插槽内容
+  ;; :slot t 是默认值，可省略
   :render (lambda (props slot)
             ;; props: 属性的 plist (:color "black")
             ;; slot: 传递给组件的内容
@@ -255,13 +255,13 @@ twidget 支持两种定义组件的方式：
 
 ### 插槽系统
 
-插槽允许你向组件传递内容：
+插槽允许你向组件传递内容。默认情况下，组件支持单一插槽（`:slot t`）。
 
-#### 单一插槽
+#### 单一插槽（默认）
 
 ```elisp
 (define-twidget wrapper
-  :slot t    ; 启用单一插槽
+  ;; :slot t 是默认值，组件默认接受插槽内容
   :render (lambda (_props slot)
             (concat "<<< " slot " >>>")))
 
@@ -269,11 +269,20 @@ twidget 支持两种定义组件的方式：
 ;; => "<<< 你好 >>>"
 ```
 
+#### 无插槽
+
+```elisp
+(define-twidget hr
+  :slot nil    ; 显式禁用插槽
+  :render (lambda (_props _slot)
+            (make-string 40 ?─)))
+```
+
 #### 命名插槽
 
 ```elisp
 (define-twidget card
-  :slots '(header content footer)
+  :slot '(header content footer)
   :render (lambda (_props slots)
             (concat
              "╭────────────────────╮\n"
@@ -290,6 +299,23 @@ twidget 支持两种定义组件的方式：
    (slot-header "我的卡片标题")
    (slot-content "这是主要内容。")
    (slot-footer "页脚信息")))
+```
+
+#### 插槽类型保留
+
+当传递单个非字符串值给插槽时，其原始类型会被保留：
+
+```elisp
+(define-twidget repeat-char
+  :props '((char . "*"))
+  :render (lambda (props slot)
+            ;; slot 可以是数字，而不仅仅是字符串
+            (let ((count (if (numberp slot) slot (string-to-number slot))))
+              (make-string count (string-to-char (plist-get props :char))))))
+
+;; 使用数字 - 类型被保留
+(twidget-parse '(repeat-char 5))
+;; => "*****"
 ```
 
 ### 组件继承
@@ -557,7 +583,7 @@ twidget 自带常用组件：
 | 关键字 | 描述 |
 |--------|------|
 | `:props` | 属性定义：符号（必选）或 `(symbol . default)` |
-| `:slot` | `nil`（无插槽）、`t`（单一插槽）或 `'(name1 name2 ...)` |
+| `:slot` | `t`（默认，单一插槽）、`nil`（无插槽）或 `'(name1 name2 ...)` 用于命名插槽 |
 | `:slots` | `:slot` 的别名，用于命名插槽 |
 | `:extends` | 要继承的父组件符号 |
 | `:render` | 简单组件的渲染函数 |

@@ -52,49 +52,41 @@
 
 ;; span - Inline text container.  Does not add any line breaks.
 (define-twidget span
-  :slot t
   :render (lambda (_props slot) slot))
 
 ;; p - Paragraph block element.
 (define-twidget p
   :type 'block
-  :slot t
   :render (lambda (_props slot) slot))
 
 ;; div - Block container element.
 (define-twidget div
   :type 'block
-  :slot t
   :render (lambda (_props slot) slot))
 
 ;; strong - Bold/strong text.  Applies bold face for emphasis.
 (define-twidget strong
-  :slot t
   :render (lambda (_props slot)
             (tp-set slot 'face 'bold)))
 
 ;; em - Emphasized (italic) text.
 (define-twidget em
-  :slot t
   :render (lambda (_props slot)
             (tp-set slot 'face 'italic)))
 
 ;; underline - Underlined text.
 (define-twidget u
-  :slot t
   :render (lambda (_props slot)
             (tp-set slot 'face 'underline)))
 
 ;; strike - Strikethrough text.
 (define-twidget del
-  :slot t
   :render (lambda (_props slot)
             (tp-set slot 'face '(:strike-through t))))
 
 ;; code - Inline code.  Displays text in monospace with subtle background.
 ;; Props: :bgcolor - Background color (default: light gray)
 (define-twidget code
-  :slot t
   :props '((palette . code))
   :render (lambda (props slot)
             (tp-set slot
@@ -104,7 +96,6 @@
 ;; pre - Preformatted code block.  Preserves whitespace and uses monospace font.
 ;; Props: :bgcolor - Background color (default: light gray)
 (define-twidget pre
-  :slot t
   :props '((palette . code))
   :render (lambda (props slot)
             (tp-set slot
@@ -115,7 +106,6 @@
 ;; Props: :prefix - Quote prefix (default: "│ "), :fgcolor - Foreground color
 (define-twidget blockquote
   :type 'block
-  :slot t
   :props '((prefix . "│") (palette . quote))
   :render (lambda (props slot)
             (let* ((palette (plist-get props :palette))
@@ -131,7 +121,6 @@
 ;; mark - Highlighted/marked text with background color.
 ;; Props: :bgcolor - Highlight background color (default: yellow)
 (define-twidget mark
-  :slot t
   :props '((palette . mark-fbg))
   :render (lambda (props slot)
             (let ((palette (plist-get props :palette)))
@@ -140,7 +129,6 @@
 ;; kbd - Keyboard key representation.  Styled to look like a keyboard key.
 ;; Props: :bgcolor, :border-color
 (define-twidget kbd
-  :slot t
   :props '((palette . tag))
   :render (lambda (props slot)
             (tp-set slot 'tp-palette (plist-get props :palette))))
@@ -148,7 +136,6 @@
 ;; small - Small text.  Reduces text height.
 ;; Props: :height - Text height multiplier (default: 0.85)
 (define-twidget small
-  :slot t
   :props '((height . 0.85))
   :render (lambda (props slot)
             (let ((height (plist-get props :height)))
@@ -157,7 +144,6 @@
 ;; headline - Base heading component with configurable height.
 (define-twidget headline
   :type 'block
-  :slot t
   :props '(height)
   :render (lambda (props slot)
             (tp-set slot 'tp-headline (plist-get props :height))))
@@ -205,18 +191,21 @@
             (tp-set (funcall parent-render props slot) 'face 'bold)))
 
 ;; br - Line break.  Inserts a newline character.
+;; Slot can be used to specify the number of line breaks (default: 1)
 (define-twidget br
-  :slot t
   :render (lambda (_props slot)
-            (let ((num (if slot
-                           (string-to-number slot)
-                         1)))
+            (let ((num (cond
+                        ((null slot) 1)
+                        ((stringp slot) (string-to-number slot))
+                        ((numberp slot) slot)
+                        (t 1))))
               (make-string num ?\n))))
 
 ;; hr - Horizontal rule/divider.  Creates a visual separator line.
 ;; Props: :width - Width in characters, :char - Character for the rule
 (define-twidget hr
   :type 'block
+  :slot nil
   :props '((width . nil)
            (color . "gray")
            (char . "─"))
@@ -232,13 +221,11 @@
 ;; ul - Unordered list container.  Wraps list items with bullet points.
 (define-twidget ul
   :type 'block
-  :slot t
   :render (lambda (_props slot) slot))
 
 ;; li - List item.  A single item in a list with a bullet or number.
 (define-twidget li
   :type 'block
-  :slot t
   :props '((bullet . "•"))
   :render (lambda (props slot)
             (let ((bullet (plist-get props :bullet)))
@@ -246,7 +233,6 @@
 
 ;; link - Clickable text link with optional URL.
 (define-twidget link
-  :slot t
   :props '((text . nil))
   :render (lambda (props slot)
             (let* ((url slot)
@@ -260,7 +246,6 @@
 ;; button - Interactive button with configurable style.
 ;; button type supports: primary, secondary, info, success, warning, danger
 (define-twidget button
-  :slot t
   :props '((type . primary) (padding . (4)))
   :render (lambda (props slot)
             (let* ((btn-type (plist-get props :type))
@@ -274,7 +259,6 @@
 
 ;; badge - Small status badge/tag with colored background.
 (define-twidget badge
-  :slot t
   :props '((type . primary) (padding . (4)))
   :render (lambda (props slot)
             (let* ((type (plist-get props :type))
