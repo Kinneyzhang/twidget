@@ -274,17 +274,20 @@
              (list :bullet bullet
                    :content content
                    :change-status
+                   ;; Use closure-captured refs directly with twidget-ref-set
+                   ;; instead of global twidget-get/twidget-set to ensure
+                   ;; each checkbox instance operates on its own state
                    (lambda ()
-                     (if (string= (twidget-get 'bullet) todo-bullet)
+                     (if (string= (twidget-ref-value bullet) todo-bullet)
                          (progn
-                           (twidget-set 'bullet done-bullet)
-                           (twidget-set 'content
-                                        (tp-add (twidget-get 'content)
-                                                'face '(:strike-through t))))
-                       (twidget-set 'bullet todo-bullet)
-                       (twidget-set 'content
-                                    (tp-remove (twidget-get 'content)
-                                               'face :strike-through)))))))
+                           (twidget-ref-set bullet done-bullet)
+                           (twidget-ref-set content
+                                            (tp-add (twidget-ref-value content)
+                                                    'face '(:strike-through t))))
+                       (twidget-ref-set bullet todo-bullet)
+                       (twidget-ref-set content
+                                        (tp-remove (twidget-ref-value content)
+                                                   'face :strike-through)))))))
   :template '(span :on-click "change-status"
                    "{bullet}" " " "{content}"))
 
@@ -298,7 +301,7 @@
                  :items slot))
   :template '(ul (checkbox
                   :todo-bullet "{todo}"
-                  :todo-bullet "{done}"
+                  :done-bullet "{done}"
                   :for "item in items" "{item}\n")))
 
 ;; (define-twidget card

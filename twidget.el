@@ -1347,6 +1347,28 @@ Returns a cons cell (LOOP-VAR . COLLECTION-NAME) or nil if invalid."
 ;;; Utilities
 ;; ============================================================================
 
+(defun twidget-ref-set (ref value)
+  "Set the value of reactive REF to VALUE and trigger UI updates.
+REF must be a twidget-ref object.  This function finds the instance
+and variable name for REF and triggers proper reactive updates.
+Use this in :setup closures that have direct access to the ref object."
+  (unless (twidget-ref-p ref)
+    (error "twidget-ref-set: REF must be a twidget-ref object"))
+  ;; Update the ref value
+  (setf (twidget-ref-value ref) value)
+  ;; Notify watchers
+  (dolist (watcher (twidget-ref-watchers ref))
+    (funcall watcher value))
+  ;; Find the instance-id and var-name for this ref by searching the registry
+  (catch 'done
+    (maphash (lambda (key stored-ref)
+               (when (eq stored-ref ref)
+                 (let ((instance-id (car key))
+                       (var-name (cdr key)))
+                   (twidget--trigger-update instance-id var-name value)
+                   (throw 'done t))))
+             twidget-ref-registry)))
+
 (defun twidget-inc (sym num)
   "Increment the numeric value stored in reactive variable SYM by NUM.
 SYM is a symbol. The value can be a string or number."
