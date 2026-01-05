@@ -1274,17 +1274,7 @@ SUB-VALUE is the new value for the specific property when ACCESSOR is provided."
     ;; Update all reactive text symbols for this variable (whole value)
     (dolist (sym symbols)
       (when (boundp sym)
-        (let ((old-value (symbol-value sym)))
-          ;; Update the symbol value
-          (set sym (if (stringp value) value (format "%s" value)))
-          ;; If text content is the same but properties differ, manually update buffer
-          ;; tp.el's tp--replace-reactive-text-in-buffer skips updates when text is equal
-          (when (and (stringp value)
-                     (stringp old-value)
-                     (equal (substring-no-properties old-value)
-                            (substring-no-properties value))
-                     (not (equal old-value value)))
-            (twidget--update-text-properties-in-buffer sym value))))))
+        (set sym (format "%s" value)))))
   ;; Then, if accessor is provided, update symbols for the specific property path
   (when accessor
     (let* ((accessor-str (cond
@@ -1304,43 +1294,10 @@ SUB-VALUE is the new value for the specific property when ACCESSOR is provided."
       ;; Update symbols for the specific property path
       (dolist (sym property-symbols)
         (when (boundp sym)
-          (let ((old-value (symbol-value sym)))
-            (set sym (if (stringp sub-value) sub-value (format "%s" sub-value)))
-            ;; If text content is the same but properties differ, manually update buffer
-            (when (and (stringp sub-value)
-                       (stringp old-value)
-                       (equal (substring-no-properties old-value)
-                              (substring-no-properties sub-value))
-                       (not (equal old-value sub-value)))
-              (twidget--update-text-properties-in-buffer sym sub-value)))))))
+          (set sym (format "%s" sub-value))))))
   ;; Update all reactive property symbols for this instance
   ;; Property functions may depend on any reactive variable, so update them all
   (twidget--update-reactive-prop-symbols instance-id))
-
-(defun twidget--update-text-properties-in-buffer (sym value)
-  "Update face property in buffer for text bound to reactive symbol SYM.
-VALUE is the new string value with text properties.
-This is called when text content is unchanged but face property differs,
-as tp.el skips updates in this case.
-Currently only handles the \\='face property which is the primary use case
-for checkbox strikethrough toggling."
-  (let ((reactive-sym (intern (format "$%s" sym))))
-    (save-excursion
-      (goto-char (point-min))
-      (let ((match (text-property-search-forward 'tp-text reactive-sym t)))
-        (while match
-          (let* ((m-start (prop-match-beginning match))
-                 (m-end (prop-match-end match)))
-            ;; Update the face property from value
-            (when (stringp value)
-              (let ((new-face (get-text-property 0 'face value)))
-                (let ((inhibit-read-only t))
-                  (if new-face
-                      (put-text-property m-start m-end 'face new-face)
-                    ;; If value has no face, remove face property
-                    (remove-text-properties m-start m-end '(face nil))))))
-            ;; Search for next match
-            (setq match (text-property-search-forward 'tp-text reactive-sym t))))))))
 
 (defun twidget-substitute-placeholders (str bindings)
   "Substitute {variable} placeholders in STR with values from BINDINGS.
