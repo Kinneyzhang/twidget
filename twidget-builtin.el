@@ -45,11 +45,6 @@
 
 ;;; Code:
 
-;; ============================================================================
-;; Section 1: Basic Text and Container Components
-;; ============================================================================
-;; These are the foundational components that other widgets build upon.
-
 ;; span - Inline text container.  Does not add any line breaks.
 (define-twidget span
   :render (lambda (_props slot) slot))
@@ -85,7 +80,6 @@
             (tp-set slot 'face '(:strike-through t))))
 
 ;; code - Inline code.  Displays text in monospace with subtle background.
-;; Props: :bgcolor - Background color (default: light gray)
 (define-twidget code
   :props '((palette . code))
   :render (lambda (props slot)
@@ -94,7 +88,6 @@
                     'face `(:family "monospace"))))
 
 ;; pre - Preformatted code block.  Preserves whitespace and uses monospace font.
-;; Props: :bgcolor - Background color (default: light gray)
 (define-twidget pre
   :props '((palette . code))
   :render (lambda (props slot)
@@ -103,7 +96,6 @@
                     'face `(:family "monospace" :box nil))))
 
 ;; blockquote - Block quotation.  Indents content with a vertical bar prefix.
-;; Props: :prefix - Quote prefix (default: "│ "), :fgcolor - Foreground color
 (define-twidget blockquote
   :type 'block
   :props '((prefix . "│") (palette . quote))
@@ -119,7 +111,6 @@
                       'face '(:box nil)))))
 
 ;; mark - Highlighted/marked text with background color.
-;; Props: :bgcolor - Highlight background color (default: yellow)
 (define-twidget mark
   :props '((palette . mark-fbg))
   :render (lambda (props slot)
@@ -127,14 +118,12 @@
               (tp-set slot 'tp-palette palette))))
 
 ;; kbd - Keyboard key representation.  Styled to look like a keyboard key.
-;; Props: :bgcolor, :border-color
 (define-twidget kbd
   :props '((palette . tag))
   :render (lambda (props slot)
             (tp-set slot 'tp-palette (plist-get props :palette))))
 
 ;; small - Small text.  Reduces text height.
-;; Props: :height - Text height multiplier (default: 0.85)
 (define-twidget small
   :props '((height . 0.85))
   :render (lambda (props slot)
@@ -274,17 +263,43 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; 复合组件
 
-;; (define-twidget checklist
-;;   :slot t
-;;   :props ((todo-bullet . "○")
-;;           (done-bullet . "◉"))
-;;   :setup (lambda (_props slot)
-;;            ())
-;;   :template '()
-;;   )
+(define-twidget checkbox
+  :props '((todo-bullet . "○")
+           (done-bullet . "◉"))
+  :setup (lambda (props slot)
+           (let* ((todo-bullet (plist-get props :todo-bullet))
+                  (done-bullet (plist-get props :done-bullet))
+                  (bullet (twidget-ref todo-bullet))
+                  (content (twidget-ref slot)))
+             (list :bullet bullet
+                   :content content
+                   :change-status
+                   (lambda ()
+                     (if (string= (twidget-get 'bullet) todo-bullet)
+                         (progn
+                           (twidget-set 'bullet done-bullet)
+                           (twidget-set 'content
+                                        (tp-add (twidget-get 'content)
+                                                'face '(:strike-through t))))
+                       (twidget-set 'bullet todo-bullet)
+                       (twidget-set 'content
+                                    (tp-remove (twidget-get 'content)
+                                               'face :strike-through)))))))
+  :template '(span :on-click "change-status"
+                   "{bullet}" " " "{content}"))
 
-;; (define-twidget todolist
-;;   )
+(define-twidget checklist
+  :slot t
+  :props '((todo . "○")
+           (done . "◉"))
+  :setup (lambda (props slot)
+           (list :todo (plist-get props :todo)
+                 :done (plist-get props :done)
+                 :items slot))
+  :template '(ul (checkbox
+                  :todo-bullet "{todo}"
+                  :todo-bullet "{done}"
+                  :for "item in items" "{item}\n")))
 
 ;; (define-twidget card
 ;;   :type 'block

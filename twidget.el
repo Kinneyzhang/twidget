@@ -281,7 +281,7 @@ Returns a plist with:
     (let ((trimmed (string-trim tp-props-expr)))
       (cond
        ;; Method call: "getProps()"
-       ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*(\\(.*\\))$" trimmed)
+       ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)\\s-*(\\(.*\\))$" trimmed)
         (let* ((method-name (match-string 1 trimmed))
                (method-key (intern (format ":%s" method-name)))
                (method-fn (plist-get reactive-bindings method-key)))
@@ -290,7 +290,7 @@ Returns a plist with:
             ;; Not a method, treat as literal string
             (list :value-fn nil :static-value tp-props-expr))))
        ;; Variable reference: "propsVar" (only if it exists in bindings)
-       ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+       ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)$" trimmed)
         (let* ((var-name trimmed)
                (var-key (intern (format ":%s" var-name)))
                (ref-or-val (plist-get reactive-bindings var-key)))
@@ -1509,15 +1509,15 @@ Returns a plist describing the statement."
   (let ((trimmed (string-trim stmt)))
     (cond
      ;; Increment: count++
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\+\\+$" trimmed)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)\\+\\+$" trimmed)
       (list :type 'increment :var (match-string 1 trimmed)))
 
      ;; Decrement: count--
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)--$" trimmed)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)--$" trimmed)
       (list :type 'decrement :var (match-string 1 trimmed)))
 
      ;; Assignment: var=value or var = value (but not == or ===)
-     ((and (string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*=\\([^=].*\\)$" trimmed)
+     ((and (string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)\\s-*=\\([^=].*\\)$" trimmed)
            ;; Additional check: value must not start with = (catches ===)
            (not (string-match "^\\s-*=" (match-string 2 trimmed))))
       (let ((var (match-string 1 trimmed))
@@ -1541,7 +1541,7 @@ Returns a plist describing the statement."
             :action (twidget--parse-single-statement (string-trim (match-string 2 trimmed)))))
 
      ;; Method call with arguments: doSomething(arg1, arg2, ...)
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*(\\(.*\\))$" trimmed)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)\\s-*(\\(.*\\))$" trimmed)
       (let* ((method (match-string 1 trimmed))
              (args-str (match-string 2 trimmed))
              (args (if (string-empty-p (string-trim args-str))
@@ -1550,7 +1550,7 @@ Returns a plist describing the statement."
         (list :type 'method-call :name method :args args)))
 
      ;; Simple method reference: doSomething
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)$" trimmed)
       (list :type 'method :name trimmed))
 
      ;; Fallback: treat as raw expression
@@ -1618,7 +1618,7 @@ Returns a plist describing the argument."
      ((string= trimmed "nil")
       (list :type 'boolean :value nil))
      ;; Variable reference
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)$" trimmed)
       (list :type 'variable :name trimmed))
      ;; Expression (fallback)
      (t
@@ -1648,7 +1648,7 @@ Returns a plist describing the value."
      ((string= trimmed "false")
       (list :type 'boolean :value nil))
      ;; Variable reference
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)$" trimmed)
       (list :type 'variable :name trimmed))
      ;; Expression
      (t
@@ -1862,7 +1862,7 @@ Supports simple comparisons and variable references."
   (let ((trimmed (string-trim condition-str)))
     (cond
      ;; Triple equals: var === value (strict equality)
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*===\\s-*\\(.+\\)$" trimmed)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)\\s-*===\\s-*\\(.+\\)$" trimmed)
       (let* ((var-name (match-string 1 trimmed))
              (value-str (string-trim (match-string 2 trimmed)))
              (var-value (twidget-get (intern var-name)))
@@ -1870,7 +1870,7 @@ Supports simple comparisons and variable references."
         (equal var-value compare-value)))
 
      ;; Double equals: var == value
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*==\\s-*\\(.+\\)$" trimmed)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)\\s-*==\\s-*\\(.+\\)$" trimmed)
       (let* ((var-name (match-string 1 trimmed))
              (value-str (string-trim (match-string 2 trimmed)))
              (var-value (twidget-get (intern var-name)))
@@ -1878,7 +1878,7 @@ Supports simple comparisons and variable references."
         (equal var-value compare-value)))
 
      ;; Not equals: var != value
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*!=\\s-*\\(.+\\)$" trimmed)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)\\s-*!=\\s-*\\(.+\\)$" trimmed)
       (let* ((var-name (match-string 1 trimmed))
              (value-str (string-trim (match-string 2 trimmed)))
              (var-value (twidget-get (intern var-name)))
@@ -1886,7 +1886,7 @@ Supports simple comparisons and variable references."
         (not (equal var-value compare-value))))
 
      ;; Greater than: var > value
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*>\\s-*\\(.+\\)$" trimmed)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)\\s-*>\\s-*\\(.+\\)$" trimmed)
       (let* ((var-name (match-string 1 trimmed))
              (value-str (string-trim (match-string 2 trimmed)))
              (var-value (twidget-get (intern var-name)))
@@ -1895,7 +1895,7 @@ Supports simple comparisons and variable references."
              (> var-value compare-value))))
 
      ;; Less than: var < value
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)\\s-*<\\s-*\\(.+\\)$" trimmed)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)\\s-*<\\s-*\\(.+\\)$" trimmed)
       (let* ((var-name (match-string 1 trimmed))
              (value-str (string-trim (match-string 2 trimmed)))
              (var-value (twidget-get (intern var-name)))
@@ -1904,12 +1904,12 @@ Supports simple comparisons and variable references."
              (< var-value compare-value))))
 
      ;; Simple variable reference (truthy check)
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)$" trimmed)
       (let ((var-value (twidget-get (intern trimmed))))
         (and var-value (not (equal var-value 0)) (not (string= var-value "")))))
 
      ;; Negation: !var
-     ((string-match "^!\\s*\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+     ((string-match "^!\\s*\\([a-zA-Z_][a-zA-Z0-9_-]*\\)$" trimmed)
       (let ((var-value (twidget-get (intern (match-string 1 trimmed)))))
         (not (and var-value (not (equal var-value 0)) (not (string= var-value ""))))))
 
@@ -1935,7 +1935,7 @@ Supports simple comparisons and variable references."
      ((string= trimmed "false") nil)
      ((string= trimmed "nil") nil)
      ;; Variable reference
-     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)$" trimmed)
+     ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)$" trimmed)
       (twidget-get (intern trimmed)))
      ;; Default - return as string
      (t trimmed))))
