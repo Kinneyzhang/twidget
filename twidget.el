@@ -1272,9 +1272,11 @@ SUB-VALUE is the new value for the specific property when ACCESSOR is provided."
   (let* ((key (cons instance-id var-name))
          (symbols (gethash key twidget-reactive-symbols)))
     ;; Update all reactive text symbols for this variable (whole value)
+    ;; Preserve text properties if value is already a string
+    ;; (avoids property loss from format conversion)
     (dolist (sym symbols)
       (when (boundp sym)
-        (set sym (format "%s" value)))))
+        (set sym (if (stringp value) value (format "%s" value))))))
   ;; Then, if accessor is provided, update symbols for the specific property path
   (when accessor
     (let* ((accessor-str (cond
@@ -1292,9 +1294,11 @@ SUB-VALUE is the new value for the specific property when ACCESSOR is provided."
            (property-symbols (when property-key
                                (gethash property-key twidget-reactive-symbols))))
       ;; Update symbols for the specific property path
+      ;; Preserve text properties if sub-value is already a string
+      ;; (avoids property loss from format conversion)
       (dolist (sym property-symbols)
         (when (boundp sym)
-          (set sym (format "%s" sub-value))))))
+          (set sym (if (stringp sub-value) sub-value (format "%s" sub-value)))))))
   ;; Update all reactive property symbols for this instance
   ;; Property functions may depend on any reactive variable, so update them all
   (twidget--update-reactive-prop-symbols instance-id))
