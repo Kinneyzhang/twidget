@@ -283,14 +283,17 @@
                            (twidget-ref-set bullet done-bullet)
                            ;; Copy the string before modifying to avoid in-place mutation
                            ;; that would cause the reactive symbol to already have the new value
-                           (twidget-ref-set content
-                                            (tp-add (copy-sequence (twidget-ref-value content))
-                                                    'face '(:strike-through t))))
+                           (twidget-ref-set
+                            content
+                            (tp-add
+                             (copy-sequence (twidget-ref-value content))
+                             'face '(:strike-through t))))
                        (twidget-ref-set bullet todo-bullet)
                        ;; Copy the string before modifying to avoid in-place mutation
-                       (twidget-ref-set content
-                                        (tp-remove (copy-sequence (twidget-ref-value content))
-                                                   'face :strike-through)))))))
+                       (twidget-ref-set
+                        content
+                        (tp-remove (copy-sequence (twidget-ref-value content))
+                                   'face :strike-through)))))))
   :template '(span :on-click "change-status"
                    "{bullet}" " " "{content}"))
 
