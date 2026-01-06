@@ -298,7 +298,6 @@
                    "{bullet}" " " "{content}"))
 
 (define-twidget checklist
-  :slot t
   :props '((todo . "○")
            (done . "◉"))
   :setup (lambda (props slot)
