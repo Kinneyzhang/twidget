@@ -278,22 +278,18 @@
                    ;; instead of global twidget-get/twidget-set to ensure
                    ;; each checkbox instance operates on its own state
                    (lambda ()
-                     (if (string= (twidget-ref-value bullet) todo-bullet)
-                         (progn
-                           (twidget-ref-set bullet done-bullet)
-                           ;; Copy the string before modifying to avoid in-place mutation
-                           ;; that would cause the reactive symbol to already have the new value
-                           (twidget-ref-set
-                            content
-                            (tp-add
-                             (copy-sequence (twidget-ref-value content))
-                             'face '(:strike-through t))))
-                       (twidget-ref-set bullet todo-bullet)
-                       ;; Copy the string before modifying to avoid in-place mutation
-                       (twidget-ref-set
-                        content
-                        (tp-remove (copy-sequence (twidget-ref-value content))
-                                   'face :strike-through)))))))
+                     (let ((curr-bullet (twidget-ref-value bullet))
+                           (curr-content (twidget-ref-value content)))
+                       (if (string= curr-bullet todo-bullet)
+                           (progn
+                             (twidget-ref-set bullet done-bullet)
+                             (twidget-ref-set
+                              content
+                              (tp-add curr-content 'tp-delete t)))
+                         (twidget-ref-set bullet todo-bullet)
+                         (twidget-ref-set
+                          content
+                          (tp-remove curr-content 'tp-delete))))))))
   :template '(span :on-click "change-status"
                    "{bullet}" " " "{content}"))
 
