@@ -1766,26 +1766,69 @@ Returns a lambda function that can be used as an event handler."
 
       ;; Increment operation
       ('increment
-       (let ((var-name (plist-get parsed-expr :var)))
-         (lambda ()
-           (interactive)
-           (twidget-inc (intern var-name) 1))))
+       (let* ((var-name (plist-get parsed-expr :var))
+              ;; Try to get the ref directly from bindings-plist at compile time
+              (var-key (intern (format ":%s" var-name)))
+              (ref-or-val (plist-get bindings-plist var-key)))
+         (if (twidget-ref-p ref-or-val)
+             ;; Direct ref access - fast path
+             (lambda ()
+               (interactive)
+               (let* ((current (twidget-ref-value ref-or-val))
+                      (current-num (if (stringp current)
+                                       (string-to-number current)
+                                     (or current 0)))
+                      (new-val (+ current-num 1)))
+                 (twidget-ref-set ref-or-val (if (stringp current)
+                                                  (number-to-string new-val)
+                                                new-val))))
+           ;; Fallback to global lookup - slow path
+           (lambda ()
+             (interactive)
+             (twidget-inc (intern var-name) 1)))))
 
       ;; Decrement operation
       ('decrement
-       (let ((var-name (plist-get parsed-expr :var)))
-         (lambda ()
-           (interactive)
-           (twidget-dec (intern var-name) 1))))
+       (let* ((var-name (plist-get parsed-expr :var))
+              ;; Try to get the ref directly from bindings-plist at compile time
+              (var-key (intern (format ":%s" var-name)))
+              (ref-or-val (plist-get bindings-plist var-key)))
+         (if (twidget-ref-p ref-or-val)
+             ;; Direct ref access - fast path
+             (lambda ()
+               (interactive)
+               (let* ((current (twidget-ref-value ref-or-val))
+                      (current-num (if (stringp current)
+                                       (string-to-number current)
+                                     (or current 0)))
+                      (new-val (- current-num 1)))
+                 (twidget-ref-set ref-or-val (if (stringp current)
+                                                  (number-to-string new-val)
+                                                new-val))))
+           ;; Fallback to global lookup - slow path
+           (lambda ()
+             (interactive)
+             (twidget-dec (intern var-name) 1)))))
 
       ;; Assignment operation
       ('assignment
-       (let ((var-name (plist-get parsed-expr :var))
-             (value-parsed (plist-get parsed-expr :value)))
-         (lambda ()
-           (interactive)
-           (let ((resolved-value (twidget--resolve-value value-parsed bindings-plist)))
-             (twidget-set (intern var-name) resolved-value)))))
+       (let* ((var-name (plist-get parsed-expr :var))
+              (value-parsed (plist-get parsed-expr :value))
+              ;; Try to get the ref directly from bindings-plist at compile time
+              ;; This avoids O(n) search through all instances at runtime
+              (var-key (intern (format ":%s" var-name)))
+              (ref-or-val (plist-get bindings-plist var-key)))
+         (if (twidget-ref-p ref-or-val)
+             ;; Direct ref access - fast path
+             (lambda ()
+               (interactive)
+               (let ((resolved-value (twidget--resolve-value value-parsed bindings-plist)))
+                 (twidget-ref-set ref-or-val resolved-value)))
+           ;; Fallback to global lookup - slow path (for variables not in bindings)
+           (lambda ()
+             (interactive)
+             (let ((resolved-value (twidget--resolve-value value-parsed bindings-plist)))
+               (twidget-set (intern var-name) resolved-value))))))
 
       ;; Multi-statement - pre-compile all handlers at definition time
       ('multi-statement
