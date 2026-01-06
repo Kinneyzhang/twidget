@@ -2153,8 +2153,8 @@ Returns a plist of text properties to apply."
     (pcase event-type
       ('click
        (list 'keymap (twidget--create-click-handler handler-fn)
-             'mouse-face 'highlight
-             'cursor 'hand))
+             ;; 'mouse-face 'highlight
+             'pointer 'hand))
       (_ nil))))
 
 (defun twidget--apply-event-properties (text event-props)
