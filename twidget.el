@@ -1101,9 +1101,10 @@ Block elements are detected by the `twidget-block-element' text property."
                (is-last (= i (1- len)))
                ;; Check if this item came from a block widget
                ;; Use length check to safely get text property
-               (is-block (and (stringp item)
-                              (> (length item) 0)
-                              (get-text-property 0 'twidget-block-element item))))
+               (is-block
+                (and (stringp item)
+                     (> (length item) 0)
+                     (get-text-property 0 'twidget-block-element item))))
           ;; Add newline BEFORE block element if there's previous content
           (when (and is-block (not is-first) (not (string-empty-p result)))
             (unless (string-suffix-p "\n" result)

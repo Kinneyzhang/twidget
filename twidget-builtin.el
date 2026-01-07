@@ -45,6 +45,18 @@
 
 ;;; Code:
 
+;; div - Block container element.
+(define-twidget div
+  :type 'block
+  :render (lambda (_props slot)
+            (twidget-slot-to-string slot)))
+
+(define-twidget col
+  :render (lambda (_props slot)
+            (if (stringp slot)
+                slot
+              (string-join slot "\n"))))
+
 ;; span - Inline text container.  Does not add any line breaks.
 (define-twidget span
   :render (lambda (_props slot)
@@ -56,31 +68,29 @@
   :render (lambda (_props slot)
             (twidget-slot-to-string slot)))
 
-;; div - Block container element.
-(define-twidget div
-  :type 'block
-  :render (lambda (_props slot)
-            (twidget-slot-to-string slot)))
-
 ;; strong - Bold/strong text.  Applies bold face for emphasis.
 (define-twidget strong
   :render (lambda (_props slot)
-            (tp-set (twidget-slot-to-string slot) 'face 'bold)))
+            (tp-set (twidget-slot-to-string slot)
+                    'face 'bold)))
 
 ;; em - Emphasized (italic) text.
 (define-twidget em
   :render (lambda (_props slot)
-            (tp-set (twidget-slot-to-string slot) 'face 'italic)))
+            (tp-set (twidget-slot-to-string slot)
+                    'face 'italic)))
 
 ;; underline - Underlined text.
 (define-twidget u
   :render (lambda (_props slot)
-            (tp-set (twidget-slot-to-string slot) 'face 'underline)))
+            (tp-set (twidget-slot-to-string slot)
+                    'face 'underline)))
 
 ;; strike - Strikethrough text.
 (define-twidget del
   :render (lambda (_props slot)
-            (tp-set (twidget-slot-to-string slot) 'face '(:strike-through t))))
+            (tp-set (twidget-slot-to-string slot)
+                    'face '(:strike-through t))))
 
 ;; code - Inline code.  Displays text in monospace with subtle background.
 (define-twidget code
@@ -118,27 +128,31 @@
   :props '((palette . mark-fbg))
   :render (lambda (props slot)
             (let ((palette (plist-get props :palette)))
-              (tp-set (twidget-slot-to-string slot) 'tp-palette palette))))
+              (tp-set (twidget-slot-to-string slot)
+                      'tp-palette palette))))
 
 ;; kbd - Keyboard key representation.  Styled to look like a keyboard key.
 (define-twidget kbd
   :props '((palette . tag))
   :render (lambda (props slot)
-            (tp-set (twidget-slot-to-string slot) 'tp-palette (plist-get props :palette))))
+            (tp-set (twidget-slot-to-string slot)
+                    'tp-palette (plist-get props :palette))))
 
 ;; small - Small text.  Reduces text height.
 (define-twidget small
   :props '((height . 0.85))
   :render (lambda (props slot)
-            (let ((height (plist-get props :height)))
-              (tp-set (twidget-slot-to-string slot) 'face `(:height ,height)))))
+            (let ((height (plist-get props :height))
+                  (slot (twidget-slot-to-string slot)))
+              (tp-set slot 'face `(:height ,height)))))
 
 ;; headline - Base heading component with configurable height.
 (define-twidget headline
   :type 'block
   :props '(height)
   :render (lambda (props slot)
-            (tp-set (twidget-slot-to-string slot) 'tp-headline (plist-get props :height))))
+            (tp-set (twidget-slot-to-string slot)
+                    'tp-headline (plist-get props :height))))
 
 ;; h1 - Level 1 heading (largest).  Height: 2.0x
 (define-twidget h1
@@ -308,25 +322,22 @@
                    "{bullet}" " " "{content}"))
 
 ;; checklist - A list of checkboxes.
-;; Slot values are used as items in :for iteration, so the slot must be a list.
-;; Unlike other widgets that convert slots to strings, checklist needs to preserve
-;; the list structure to iterate over individual items.
 (define-twidget checklist
   :props '((todo . "○")
-           (done . "◉"))
-  :setup (lambda (props slot)
+           (done . "◉")
+           (data . nil))
+  :setup (lambda (props _slot)
            ;; slot can be:
            ;; - a list of items when multiple slot args are passed
            ;; - a single item when one slot arg is passed
            ;; Ensure items is always a list for :for iteration
-           (let ((items (if (listp slot) slot (list slot))))
-             (list :todo (plist-get props :todo)
-                   :done (plist-get props :done)
-                   :items items)))
-  :template '(ul (checkbox
-                  :todo-bullet "{todo}"
-                  :done-bullet "{done}"
-                  :for "item in items" "{item}\n")))
+           (list :todo (plist-get props :todo)
+                 :done (plist-get props :done)
+                 :items (plist-get props :data)))
+  :template '(col (checkbox
+                   :todo-bullet "{todo}"
+                   :done-bullet "{done}"
+                   :for "item in items" "{item}")))
 
 ;; (define-twidget card
 ;;   :type 'block
