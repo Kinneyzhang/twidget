@@ -505,7 +505,9 @@ COMPILER-FN is a function that generates code for the directive."
  :for
  (lambda (for-expr _widget-name _remaining-args body-code)
    "Compile :for directive into a dolist loop.
-BODY-CODE is the generated Elisp code for rendering the inner content."
+BODY-CODE is the generated Elisp code for rendering the inner content.
+Returns a list of rendered items, which can then be joined by parent
+components (e.g., col joins with newlines, span concatenates)."
    (let ((parsed (twidget-parse-for-expression for-expr)))
      (if parsed
          (let* ((loop-var (car parsed))
@@ -513,17 +515,17 @@ BODY-CODE is the generated Elisp code for rendering the inner content."
                 (loop-var-sym (make-symbol (concat "--" loop-var "--")))
                 (collection-sym (make-symbol "--collection--"))
                 (result-sym (make-symbol "--for-result--")))
-           `(let ((,result-sym "")
+           `(let ((,result-sym nil)
                   (,collection-sym (cdr (assoc ,collection-name bindings))))
               (if (listp ,collection-sym)
                   (dolist (,loop-var-sym ,collection-sym)
                     (let ((bindings (cons (cons ,loop-var ,loop-var-sym) bindings)))
-                      (setq ,result-sym (concat ,result-sym ,body-code))))
+                      (push ,body-code ,result-sym)))
                 (warn "twidget: :for collection `%s' is not a list" ,collection-name))
-              ,result-sym))
+              (nreverse ,result-sym)))
        `(progn
           (warn "twidget: Invalid :for expression: %s" ,for-expr)
-          "")))))
+          nil)))))
 
 ;; Register the :if directive compiler
 (twidget--register-directive-compiler
@@ -1058,7 +1060,9 @@ Returns the rendered string with text properties applied."
                                                    ;; Add remaining args (slot values)
                                                    args))))
                               (push (twidget-parse new-form loop-bindings) results))))
-                        (cl-return-from twidget-parse (apply #'concat (nreverse results))))
+                        ;; Return a list of results, not concatenated string
+                        ;; This allows parent components (like col) to join them as needed
+                        (cl-return-from twidget-parse (nreverse results)))
                     (warn "twidget-parse: :for collection `%s' is not a list" collection-name)))
               (warn "twidget-parse: Invalid :for expression: %s" for-expr))))
         ;; Process remaining arguments (slot values or named slot sexps)
@@ -1424,7 +1428,8 @@ REACTIVE-BINDINGS is the original plist from :setup, used for event handlers."
 BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
 substitution.
 Preserves original type for non-string, non-widget values.
-For widget forms, marks block widgets with `twidget-block-element' property."
+For widget forms, marks block widgets with `twidget-block-element' property.
+When the widget uses :for directive, returns a list of rendered items."
   (cond
    ((stringp val)
     (twidget-substitute-placeholders val bindings))
@@ -1433,10 +1438,15 @@ For widget forms, marks block widgets with `twidget-block-element' property."
          (assoc (car val) twidget-alist))
     (let ((rendered (twidget-parse val bindings))
           (is-block (twidget-is-block-widget-p val)))
-      ;; Mark block elements so twidget-slot-to-string can add newlines
-      (if (and is-block (stringp rendered))
-          (propertize rendered 'twidget-block-element t)
-        rendered)))
+      ;; twidget-parse may return a list when :for is used
+      (cond
+       ;; List result from :for - return as-is
+       ((listp rendered) rendered)
+       ;; Block element string - mark with property
+       ((and is-block (stringp rendered))
+        (propertize rendered 'twidget-block-element t))
+       ;; Other string - return as-is
+       (t rendered))))
    ;; Preserve original type for primitives (numbers, symbols, etc.)
    (t val)))
 
