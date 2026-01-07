@@ -71,7 +71,12 @@ every other element (starting from the first) is a keyword."
 
 (defvar twidget-alist nil
   "Alist of widget definitions: (WIDGET-NAME . DEFINITION).
-Each DEFINITION is a plist with :props, :slot, :render, :setup, and :template keys.")
+Each DEFINITION is a plist with :props, :slot, :render, :setup, :template,
+and :compiled-render keys.
+
+The :compiled-render key holds a pre-compiled render function generated at
+component definition time.  This optimization reduces runtime overhead by
+pre-parsing templates and pre-compiling event handlers.")
 
 (defvar-local twidget-reactive-data (make-hash-table :test 'equal)
   "Buffer-local hash table for reactive data.
@@ -430,6 +435,357 @@ There are two ways to define a widget:
                        type)))
       `(twidget-internal ',name ,props ,slot-form ,type-form ,extends ,render ,setup ,template))))
 
+;;; Template Pre-compilation (Render Function Generation)
+;; ============================================================================
+
+(defun twidget--compile-template (template)
+  "Compile TEMPLATE into a compiled render function.
+
+This function is called at component definition time to pre-compile
+the template structure.  The resulting function takes runtime arguments
+\(BINDINGS INSTANCE-ID REACTIVE-BINDINGS\) and returns the rendered string.
+
+Pre-compilation includes:
+- Analyzing template structure (strings, widget forms, lists)
+- Pre-parsing placeholder patterns in strings
+- Pre-compiling event handlers
+- Pre-parsing :for directive expressions
+
+The compiled function avoids repeated template parsing at render time,
+reducing runtime overhead."
+  (cond
+   ;; String template - compile placeholder pattern
+   ((stringp template)
+    (twidget--compile-template-string template))
+   ;; Widget form - compile the widget invocation
+   ((and (listp template)
+         (symbolp (car template)))
+    ;; Check if it's a defined widget or could be defined later
+    (twidget--compile-template-widget template))
+   ;; List of forms - compile each form
+   ((listp template)
+    (twidget--compile-template-list template))
+   ;; Other - return a simple function that converts to string
+   (t
+    (let ((tmpl template))
+      (lambda (_bindings _instance-id _reactive-bindings)
+        (format "%s" tmpl))))))
+
+(defun twidget--compile-template-string (str)
+  "Compile a string template STR with placeholder patterns.
+Returns a compiled function that expands placeholders at runtime.
+Pre-analyzes the placeholder structure to avoid repeated regex matching."
+  (let ((parts nil)
+        (start 0))
+    ;; Pre-parse all placeholders in the string
+    (while (string-match "{\\([^}]+\\)}" str start)
+      (let* ((match-start (match-beginning 0))
+             (match-end (match-end 0))
+             (var-expr (match-string 1 str)))
+        ;; Add the literal part before this placeholder
+        (when (> match-start start)
+          (push (list :literal (substring str start match-start)) parts))
+        ;; Add the placeholder with pre-parsed accessor info
+        (let ((parsed (twidget--parse-dot-notation var-expr)))
+          (push (list :placeholder var-expr (car parsed) (cdr parsed)) parts))
+        (setq start match-end)))
+    ;; Add remaining literal part after last placeholder
+    (when (< start (length str))
+      (push (list :literal (substring str start)) parts))
+    (setq parts (nreverse parts))
+    ;; Return compiled function
+    (if (null parts)
+        ;; Empty string case
+        (lambda (_bindings _instance-id _reactive-bindings)
+          str)
+      ;; Generate a function that processes pre-parsed parts
+      (let ((compiled-parts parts)
+            (original-str str))
+        (lambda (bindings instance-id _reactive-bindings)
+          (let ((result ""))
+            (dolist (part compiled-parts)
+              (pcase (car part)
+                (:literal
+                 (setq result (concat result (cadr part))))
+                (:placeholder
+                 (let* ((var-expr (nth 1 part))
+                        (base-var (nth 2 part))
+                        (accessors (nth 3 part))
+                        (binding (assoc base-var bindings))
+                        (ref-info (gethash (cons instance-id base-var)
+                                           twidget-ref-registry)))
+                   (if binding
+                       (let* ((base-value (cdr binding))
+                              (actual-value (twidget--get-nested-value base-value accessors))
+                              (value-str (format "%s" actual-value)))
+                         (if ref-info
+                             (setq result (concat result
+                                                  (twidget--apply-reactive-text
+                                                   value-str instance-id var-expr)))
+                           (setq result (concat result value-str))))
+                     ;; No binding found - keep placeholder as is
+                     (setq result (concat result
+                                          (format "{%s}" var-expr))))))))
+            result))))))
+
+(defun twidget--compile-template-list (forms)
+  "Compile a list of template FORMS.
+Returns a compiled function that processes each form with block element handling."
+  (let* ((compiled-forms (mapcar #'twidget--compile-template forms))
+         (form-count (length forms))
+         (original-forms forms))
+    (lambda (bindings instance-id reactive-bindings)
+      (let ((result ""))
+        (dotimes (i form-count)
+          (let* ((form (nth i original-forms))
+                 (compiled-fn (nth i compiled-forms))
+                 (is-first (= i 0))
+                 (is-last (= i (1- form-count)))
+                 (is-block (twidget-is-block-widget-p form))
+                 (rendered-val (funcall compiled-fn bindings instance-id reactive-bindings))
+                 (rendered (if (stringp rendered-val) rendered-val (format "%s" rendered-val))))
+            ;; Add newline BEFORE block element if there's previous content
+            (when (and is-block (not is-first) (not (string-empty-p result)))
+              (unless (string-suffix-p "\n" result)
+                (setq result (concat result "\n"))))
+            ;; Append the rendered content
+            (setq result (concat result rendered))
+            ;; Add newline AFTER block element if not last
+            (when (and is-block (not is-last))
+              (unless (string-suffix-p "\n" result)
+                (setq result (concat result "\n"))))))
+        result))))
+
+(defun twidget--compile-template-widget (template)
+  "Compile a widget form TEMPLATE.
+Pre-analyzes the widget invocation and pre-compiles event handlers.
+Returns a compiled function."
+  (let* ((widget-name (car template))
+         (rest (cdr template))
+         ;; Pre-parse keyword arguments and slot values
+         (parsed (twidget--precompile-widget-args rest)))
+    (lambda (bindings instance-id reactive-bindings)
+      ;; At runtime, process the pre-compiled structure
+      (twidget--render-precompiled-widget
+       widget-name parsed bindings instance-id reactive-bindings))))
+
+(defun twidget--precompile-widget-args (args)
+  "Pre-parse widget ARGS at definition time.
+Returns a plist with:
+  :keyword-args - list of (KEYWORD . VALUE-OR-COMPILED-FN) pairs
+  :slot-args - list of slot values or compiled functions
+  :for-expr - pre-parsed :for expression (if any)
+  :event-handlers - pre-compiled event handlers
+  :tp-props-expr - :tp-props expression (if any)"
+  (let ((keyword-args nil)
+        (slot-args nil)
+        (for-expr nil)
+        (event-handlers nil)
+        (tp-props-expr nil)
+        (current-args args))
+    ;; Parse keyword arguments first
+    (while (and current-args (keywordp (car current-args)))
+      (let ((key (car current-args))
+            (val (cadr current-args)))
+        (cond
+         ;; Handle :for directive - pre-parse the expression
+         ((eq key :for)
+          (setq for-expr (twidget-parse-for-expression val)))
+         ;; Handle :tp-props
+         ((eq key :tp-props)
+          (setq tp-props-expr val))
+         ;; Handle event properties - pre-parse but defer compilation
+         ;; since we need reactive-bindings at runtime for method resolution
+         ((twidget--is-event-prop-p key)
+          (let ((event-type (twidget--is-event-prop-p key)))
+            (push (cons event-type val) event-handlers)))
+         ;; Regular prop
+         (t (push (cons key val) keyword-args)))
+        (setq current-args (cddr current-args))))
+    ;; Remaining args are slot values - pre-compile template strings/widgets
+    (dolist (arg current-args)
+      (push (twidget--compile-template arg) slot-args))
+    (list :keyword-args (nreverse keyword-args)
+          :slot-args (nreverse slot-args)
+          :for-expr for-expr
+          :event-handlers (nreverse event-handlers)
+          :tp-props-expr tp-props-expr)))
+
+(defun twidget--render-precompiled-widget (widget-name precompiled bindings instance-id reactive-bindings)
+  "Render a pre-compiled widget WIDGET-NAME with PRECOMPILED structure.
+BINDINGS is the runtime bindings alist.
+INSTANCE-ID is the widget instance identifier.
+REACTIVE-BINDINGS is the plist from :setup for event handlers."
+  (let* ((definition (cdr (assoc widget-name twidget-alist)))
+         (for-expr (plist-get precompiled :for-expr))
+         (keyword-args (plist-get precompiled :keyword-args))
+         (slot-args (plist-get precompiled :slot-args))
+         (event-handlers (plist-get precompiled :event-handlers))
+         (tp-props-expr (plist-get precompiled :tp-props-expr)))
+    (unless definition
+      (error "Undefined widget: %S" widget-name))
+    ;; Handle :for directive - iterate and return concatenated result
+    (if for-expr
+        (let* ((loop-var (car for-expr))
+               (collection-name (cdr for-expr))
+               (collection (cdr (assoc collection-name bindings)))
+               (results nil))
+          (if (listp collection)
+              (progn
+                (dolist (item collection)
+                  ;; Create new bindings with loop variable
+                  (let ((loop-bindings (cons (cons loop-var item) bindings)))
+                    ;; Render slot args with loop bindings
+                    (let ((rendered-slots
+                           (mapcar (lambda (compiled-fn)
+                                     (funcall compiled-fn loop-bindings instance-id reactive-bindings))
+                                   slot-args)))
+                      ;; Reconstruct and parse widget form
+                      (let* ((props-plist (apply #'append
+                                                 (mapcar (lambda (kv)
+                                                           (list (car kv)
+                                                                 (twidget--resolve-prop-value
+                                                                  (cdr kv) loop-bindings)))
+                                                         keyword-args)))
+                             (slot-value (twidget--process-rendered-slots rendered-slots)))
+                        (push (twidget--render-widget-with-props
+                               widget-name definition props-plist slot-value
+                               event-handlers tp-props-expr loop-bindings instance-id reactive-bindings)
+                              results)))))
+                (apply #'concat (nreverse results)))
+            (progn
+              (warn "twidget: :for collection `%s' is not a list" collection-name)
+              "")))
+      ;; No :for - render normally
+      (let ((rendered-slots
+             (mapcar (lambda (compiled-fn)
+                       (funcall compiled-fn bindings instance-id reactive-bindings))
+                     slot-args))
+            (props-plist (apply #'append
+                                (mapcar (lambda (kv)
+                                          (list (car kv)
+                                                (twidget--resolve-prop-value
+                                                 (cdr kv) bindings)))
+                                        keyword-args))))
+        (twidget--render-widget-with-props
+         widget-name definition props-plist
+         (twidget--process-rendered-slots rendered-slots)
+         event-handlers tp-props-expr bindings instance-id reactive-bindings)))))
+
+(defun twidget--resolve-prop-value (value bindings)
+  "Resolve a property VALUE using BINDINGS.
+If VALUE is a function (compiled template), call it to get the value.
+Otherwise return VALUE as-is."
+  (if (functionp value)
+      (funcall value bindings nil nil)
+    value))
+
+(defun twidget--process-rendered-slots (rendered-slots)
+  "Process RENDERED-SLOTS list into appropriate slot value.
+Returns nil for empty list, the single item for single-element list,
+or the list itself for multiple elements."
+  (cond
+   ((null rendered-slots) nil)
+   ((= (length rendered-slots) 1) (car rendered-slots))
+   (t rendered-slots)))
+
+(defun twidget--render-widget-with-props (widget-name definition props-plist slot-value
+                                                      event-handlers tp-props-expr
+                                                      bindings instance-id reactive-bindings)
+  "Render WIDGET-NAME with DEFINITION using pre-processed arguments.
+PROPS-PLIST is the resolved props.
+SLOT-VALUE is the rendered slot content.
+EVENT-HANDLERS is a list of (EVENT-TYPE . HANDLER-STRING) pairs.
+TP-PROPS-EXPR is the :tp-props expression.
+BINDINGS, INSTANCE-ID, REACTIVE-BINDINGS are runtime context."
+  (let* ((prop-defs (plist-get definition :props))
+         (slot-def (plist-get definition :slot))
+         (extends (plist-get definition :extends))
+         (parent-render-fn (plist-get definition :parent-render))
+         (render-fn (plist-get definition :render))
+         (setup-fn (plist-get definition :setup))
+         (template (plist-get definition :template))
+         (compiled-render (plist-get definition :compiled-render))
+         ;; Build the final props plist with defaults
+         (parsed-props nil))
+    ;; Apply defaults from prop definitions
+    (dolist (prop-def prop-defs)
+      (let* ((prop-name (twidget-prop-name prop-def))
+             (prop-keyword (intern (format ":%s" prop-name)))
+             (provided (plist-get props-plist prop-keyword)))
+        (if provided
+            (setq parsed-props (plist-put parsed-props prop-keyword provided))
+          (when (twidget-prop-has-default-p prop-def)
+            (setq parsed-props (plist-put parsed-props prop-keyword
+                                          (twidget-prop-default prop-def)))))))
+    ;; Render the widget
+    (let ((rendered-result
+           (cond
+            ;; Composite widget with compiled render function
+            ((and setup-fn compiled-render)
+             (twidget--render-composite-compiled setup-fn compiled-render parsed-props slot-value))
+            ;; Composite widget without compiled render (fallback)
+            ((and setup-fn template)
+             (twidget--render-composite setup-fn template parsed-props slot-value))
+            ;; Simple widget with inheritance
+            (extends
+             (funcall render-fn parsed-props slot-value parent-render-fn))
+            ;; Simple widget
+            (render-fn
+             (funcall render-fn parsed-props slot-value))
+            (t ""))))
+      ;; Apply event handlers
+      (when event-handlers
+        (dolist (eh event-handlers)
+          (let* ((event-type (car eh))
+                 (handler-string (cdr eh))
+                 (event-props (twidget--process-event-prop event-type handler-string reactive-bindings)))
+            (when event-props
+              (setq rendered-result (twidget--apply-event-properties rendered-result event-props))))))
+      ;; Apply :tp-props
+      (when tp-props-expr
+        (let ((tp-props-info (twidget--parse-tp-props-value tp-props-expr reactive-bindings)))
+          (let ((value-fn (plist-get tp-props-info :value-fn))
+                (static-value (plist-get tp-props-info :static-value)))
+            (cond
+             (value-fn
+              (setq rendered-result (twidget--apply-reactive-tp-props rendered-result value-fn instance-id)))
+             (static-value
+              (setq rendered-result (twidget--apply-static-tp-props rendered-result static-value)))))))
+      rendered-result)))
+
+(defun twidget--render-composite-compiled (setup-fn compiled-render-fn props slot)
+  "Render a composite widget using SETUP-FN and COMPILED-RENDER-FN.
+PROPS is the parsed props plist.
+SLOT is the slot value.
+This is the optimized version that uses pre-compiled render functions."
+  (let* ((reactive-bindings (funcall setup-fn props slot))
+         (instance-id (twidget--generate-instance-id))
+         (bindings nil))
+    ;; Process reactive bindings from setup
+    (let ((plist reactive-bindings))
+      (while plist
+        (let ((key (car plist))
+              (val (cadr plist)))
+          (when (keywordp key)
+            (let* ((var-name (substring (symbol-name key) 1))
+                   (ref-value (if (twidget-ref-p val)
+                                  (twidget-ref-value val)
+                                val)))
+              (when (twidget-ref-p val)
+                (twidget--register-ref instance-id var-name val))
+              (push (cons var-name ref-value) bindings))))
+        (setq plist (cddr plist))))
+    ;; Store instance info for reactivity
+    (puthash instance-id
+             (list :bindings reactive-bindings :template nil)
+             twidget-instances)
+    ;; Call the pre-compiled render function
+    (funcall compiled-render-fn bindings instance-id reactive-bindings)))
+
+;;; Widget Definition Internal Function
+;; ============================================================================
+
 (defun twidget-internal (name props slot type extends render setup template)
   "Internal function to define a widget NAME with PROPS, SLOT, TYPE, EXTENDS, RENDER, SETUP, and TEMPLATE.
 PROPS is a list of property definitions.
@@ -470,15 +826,19 @@ TEMPLATE is a template sexp (for composite widgets)."
                                  props slot grandparent-render))))
             ;; Parent doesn't extend - use parent render directly
             (setq parent-render (plist-get parent-def :render))))))
-    (let ((definition (list :props final-props
-                            :slot final-slot
-                            :type final-type
-                            :extends extends
-                            :parent-render parent-render
-                            :render render
-                            :setup setup
-                            :template template))
-          (existing (assoc name twidget-alist)))
+    ;; Compile template if present (for composite widgets)
+    (let* ((compiled-render (when (and setup template)
+                              (twidget--compile-template template)))
+           (definition (list :props final-props
+                             :slot final-slot
+                             :type final-type
+                             :extends extends
+                             :parent-render parent-render
+                             :render render
+                             :setup setup
+                             :template template
+                             :compiled-render compiled-render))
+           (existing (assoc name twidget-alist)))
       (if existing
           (setcdr existing definition)
         (push (cons name definition) twidget-alist)))
@@ -734,17 +1094,24 @@ Ignoring arguments: %S" widget-name args)))
         ;; Check if this is a composite widget (has :setup and :template)
         (let ((setup-fn (plist-get definition :setup))
               (template (plist-get definition :template))
+              (compiled-render (plist-get definition :compiled-render))
               (rendered-result nil))
           (setq rendered-result
-                (if (and setup-fn template)
-                    ;; Composite widget: call setup, expand template, and render
-                    (twidget--render-composite setup-fn template parsed-props slot-value)
-                  ;; Simple widget: call the render function
-                  (if extends
-                      ;; With inheritance, pass parent-render as third argument
-                      (funcall render-fn parsed-props slot-value parent-render-fn)
-                    ;; Normal render call
-                    (funcall render-fn parsed-props slot-value))))
+                (cond
+                 ;; Composite widget with compiled render function (optimized path)
+                 ((and setup-fn compiled-render)
+                  (twidget--render-composite-compiled setup-fn compiled-render parsed-props slot-value))
+                 ;; Composite widget without compiled render (fallback)
+                 ((and setup-fn template)
+                  (twidget--render-composite setup-fn template parsed-props slot-value))
+                 ;; Simple widget with inheritance
+                 (extends
+                  (funcall render-fn parsed-props slot-value parent-render-fn))
+                 ;; Simple widget
+                 (render-fn
+                  (funcall render-fn parsed-props slot-value))
+                 ;; Default case
+                 (t "")))
           ;; Apply :tp-props if specified
           (when tp-props-value
             (setq rendered-result (twidget--apply-static-tp-props rendered-result tp-props-value)))

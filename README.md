@@ -91,6 +91,7 @@ twidget enables you to:
 | 🧩 **Composite Widgets** | Build complex widgets using `:setup` and `:template` |
 | 🖱️ **Event System** | Vue3-like declarative event binding with `:on-click` and inline expressions |
 | 🔄 **Loop Directive** | Iterate over collections with `:for` directive |
+| 🚀 **Template Precompilation** | Templates are precompiled at definition time to reduce runtime overhead |
 
 ---
 
@@ -479,6 +480,8 @@ The event system provides Vue3-like declarative event binding.
 ```
 
 For more details, see [Event System Documentation](docs/event-system.md).
+
+For performance optimization details, see [Precompilation Documentation](docs/precompilation.md).
 
 ---
 
