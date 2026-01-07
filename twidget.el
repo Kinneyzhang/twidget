@@ -1377,8 +1377,9 @@ Returns a plist with:
               (setq args (cdr args))
               (when args
                 (let* ((handler-expr (car args))
-                       (compiled-props (twidget--process-event-prop 
-                                        event-type handler-expr reactive-bindings)))
+                       (compiled-props
+                        (twidget--process-event-prop 
+                         event-type handler-expr reactive-bindings)))
                   (when compiled-props
                     (setq event-props (append event-props compiled-props))))
                 (setq args (cdr args)))))
@@ -2612,7 +2613,6 @@ Returns a plist of text properties to apply."
     (pcase event-type
       ('click
        (list 'keymap (twidget--create-click-handler handler-fn)
-             ;; 'mouse-face 'highlight
              'pointer 'hand))
       (_ nil))))
 
