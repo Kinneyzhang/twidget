@@ -2197,7 +2197,7 @@ Returns a lambda function that can be used as an event handler."
           ;; Method not found in bindings - could be a global function
           (t
            (let ((global-fn (intern method-name)))
-             (if (commandp global-fn)
+             (if (and (fboundp global-fn) (commandp global-fn))
                  global-fn
                (lambda ()
                  (interactive)
