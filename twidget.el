@@ -138,6 +138,15 @@ When the value changes, the UI will be updated automatically."
 (defvar-local twidget-reactive-prop-counter 0
   "Counter for generating unique reactive property IDs.")
 
+(defvar-local twidget-event-handler-registry (make-hash-table :test 'equal)
+  "Buffer-local hash table for event handler functions.
+Keys are handler IDs (strings), values are the handler functions.
+This allows keymaps to use indirect references instead of capturing
+full closures, resulting in simpler keymap representations.")
+
+(defvar-local twidget-event-handler-counter 0
+  "Counter for generating unique event handler IDs.")
+
 (defvar-local twidget-reactive-prop-symbols (make-hash-table :test 'equal)
   "Buffer-local hash table for reactive text property symbol tracking.
 Keys are (instance-id . \"__props__\"), values are lists of (sym value-fn prop-name) triples.")
@@ -1532,14 +1541,16 @@ Block elements are detected by the `twidget-block-element' text property."
 (defun twidget-clear-buffer-state ()
   "Clear all buffer-local widget state.
 This should be called before re-inserting widgets to ensure fresh state.
-Clears: widget instances, ref registry, reactive symbols, and counters."
+Clears: widget instances, ref registry, reactive symbols, event handlers, and counters."
   (interactive)
   (clrhash twidget-instances)
   (clrhash twidget-ref-registry)
   (clrhash twidget-reactive-symbols)
   (clrhash twidget-reactive-prop-symbols)
+  (clrhash twidget-event-handler-registry)
   (setq twidget-reactive-text-counter 0)
-  (setq twidget-reactive-prop-counter 0))
+  (setq twidget-reactive-prop-counter 0)
+  (setq twidget-event-handler-counter 0))
 
 (defun twidget-extract-variables (form)
   "Extract variable names referenced in :for directives from FORM.
@@ -2583,13 +2594,31 @@ Handles atoms (symbols, numbers, strings) and parenthesized expressions."
             (cl-incf i))
           i))))))
 
+(defun twidget--register-event-handler (handler-fn)
+  "Register HANDLER-FN in the event handler registry.
+Returns a unique handler ID that can be used to look up the function later.
+This allows keymaps to use simple lookups instead of capturing full closures."
+  (let ((handler-id (format "twidget-handler-%d" (cl-incf twidget-event-handler-counter))))
+    (puthash handler-id handler-fn twidget-event-handler-registry)
+    handler-id))
+
+(defun twidget--get-event-handler (handler-id)
+  "Get the event handler function for HANDLER-ID from the registry."
+  (gethash handler-id twidget-event-handler-registry))
+
 (defun twidget--create-click-handler (handler-fn)
   "Create a keymap with HANDLER-FN bound to mouse click.
-Returns a keymap suitable for use as a text property."
-  (let ((map (make-sparse-keymap)))
-    (define-key map [mouse-1] handler-fn)
-    (define-key map (kbd "RET") handler-fn)
-    (define-key map (kbd "<return>") handler-fn)
+Returns a keymap suitable for use as a text property.
+Uses indirect reference via handler registry to keep keymaps simple."
+  (let* ((handler-id (twidget--register-event-handler handler-fn))
+         (wrapper-fn (lambda ()
+                       (interactive)
+                       (let ((fn (twidget--get-event-handler handler-id)))
+                         (when fn (funcall fn)))))
+         (map (make-sparse-keymap)))
+    (define-key map [mouse-1] wrapper-fn)
+    (define-key map (kbd "RET") wrapper-fn)
+    (define-key map (kbd "<return>") wrapper-fn)
     map))
 
 (defun twidget--process-event-prop (event-type handler-string bindings-plist)
