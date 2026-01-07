@@ -1040,14 +1040,20 @@ REACTIVE-BINDINGS is the original plist from :setup, used for event handlers."
   "Process a single slot VAL, recursively parsing widget forms.
 BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
 substitution.
-Preserves original type for non-string, non-widget values."
+Preserves original type for non-string, non-widget values.
+For widget forms, marks block widgets with `twidget-block-element' property."
   (cond
    ((stringp val)
     (twidget-substitute-placeholders val bindings))
    ((and (listp val)
          (symbolp (car val))
          (assoc (car val) twidget-alist))
-    (twidget-parse val bindings))
+    (let ((rendered (twidget-parse val bindings))
+          (is-block (twidget-is-block-widget-p val)))
+      ;; Mark block elements so twidget-slot-to-string can add newlines
+      (if (and is-block (stringp rendered))
+          (propertize rendered 'twidget-block-element t)
+        rendered)))
    ;; Preserve original type for primitives (numbers, symbols, etc.)
    (t val)))
 
@@ -1078,16 +1084,35 @@ SLOT can be:
   - a string: returned as-is
   - a list: elements are converted to strings and concatenated
 
-This function simply concatenates slot values into a string.
-Block element handling (adding newlines around block elements) is
-performed during template expansion in `twidget--expand-template-list'."
+Block element handling is applied when concatenating list elements:
+- Block elements are preceded by a newline (if not first)
+- Block elements are followed by a newline (if not last)
+Block elements are detected by the `twidget-block-element' text property."
   (cond
    ((null slot) "")
    ((stringp slot) slot)
    ((listp slot)
-    (mapconcat (lambda (item)
-                 (if (stringp item) item (format "%s" item)))
-               slot ""))
+    (let ((result "")
+          (len (length slot)))
+      (dotimes (i len)
+        (let* ((item (nth i slot))
+               (item-str (if (stringp item) item (format "%s" item)))
+               (is-first (= i 0))
+               (is-last (= i (1- len)))
+               ;; Check if this item came from a block widget
+               (is-block (and (stringp item)
+                              (get-text-property 0 'twidget-block-element item))))
+          ;; Add newline BEFORE block element if there's previous content
+          (when (and is-block (not is-first) (not (string-empty-p result)))
+            (unless (string-suffix-p "\n" result)
+              (setq result (concat result "\n"))))
+          ;; Append the item
+          (setq result (concat result item-str))
+          ;; Add newline AFTER block element if not last
+          (when (and is-block (not is-last))
+            (unless (string-suffix-p "\n" result)
+              (setq result (concat result "\n"))))))
+      result))
    ;; Other types - convert to string
    (t (format "%s" slot))))
 
