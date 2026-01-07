@@ -2613,6 +2613,7 @@ Returns a plist of text properties to apply."
     (pcase event-type
       ('click
        (list 'keymap (twidget--create-click-handler handler-fn)
+             'rear-nonsticky '(keymap)
              'pointer 'hand))
       (_ nil))))
 
