@@ -184,11 +184,17 @@
 
 ;; br - Line break.  Inserts a newline character.
 ;; Slot: Optional number of line breaks (default: 1).
-;;   Accepts: number, string representation of a number, list, or nil.
+;;   Accepts: number, string representation of a number, or nil.
+;;   This widget expects a single numeric value. If multiple slot values
+;;   are provided (as a list), only the first value is used because
+;;   it doesn't make semantic sense to "concatenate" line break counts.
 ;;   Examples: (br), (br 3), (br "2")
 (define-twidget br
   :render (lambda (_props slot)
-            (let* ((slot-val (if (listp slot) (car slot) slot))
+            (let* (;; Extract the first value if slot is a list
+                   (slot-val (cond
+                              ((listp slot) (car slot))
+                              (t slot)))
                    (num (cond
                          ((null slot-val) 1)
                          ((stringp slot-val) (string-to-number slot-val))
@@ -301,6 +307,10 @@
   :template '(span :on-click "change-status"
                    "{bullet}" " " "{content}"))
 
+;; checklist - A list of checkboxes.
+;; Slot values are used as items in :for iteration, so the slot must be a list.
+;; Unlike other widgets that convert slots to strings, checklist needs to preserve
+;; the list structure to iterate over individual items.
 (define-twidget checklist
   :props '((todo . "○")
            (done . "◉"))

@@ -1076,40 +1076,18 @@ Use `twidget-slot-to-string' to convert a list slot to a string when needed."
 SLOT can be:
   - nil: returns empty string
   - a string: returned as-is
-  - a list: elements are concatenated with block element handling
+  - a list: elements are converted to strings and concatenated
 
-Block element handling follows HTML-like rules:
-- Block elements start on a new line (newline added before if preceded by content)
-- Block elements are followed by a newline (when followed by other content)
-- Inline elements flow together without automatic newlines"
+This function simply concatenates slot values into a string.
+Block element handling (adding newlines around block elements) is
+performed during template expansion in `twidget--expand-template-list'."
   (cond
    ((null slot) "")
    ((stringp slot) slot)
    ((listp slot)
-    (let ((result "")
-          (len (length slot)))
-      (dotimes (i len)
-        (let* ((slot-item (nth i slot))
-               (is-first (= i 0))
-               (is-last (= i (1- len)))
-               ;; Check if original form was a block widget (for proper handling,
-               ;; we check if the rendered result looks like it came from a block widget)
-               (is-block nil)  ; Note: block detection works on original form, not rendered result
-               ;; Convert to string if needed
-               (rendered (if (stringp slot-item)
-                             slot-item
-                           (format "%s" slot-item))))
-          ;; Add newline BEFORE block element if there's previous content
-          (when (and is-block (not is-first) (not (string-empty-p result)))
-            (unless (string-suffix-p "\n" result)
-              (setq result (concat result "\n"))))
-          ;; Append the rendered content
-          (setq result (concat result rendered))
-          ;; Add newline AFTER block element if not the last element
-          (when (and is-block (not is-last))
-            (unless (string-suffix-p "\n" result)
-              (setq result (concat result "\n"))))))
-      result))
+    (mapconcat (lambda (item)
+                 (if (stringp item) item (format "%s" item)))
+               slot ""))
    ;; Other types - convert to string
    (t (format "%s" slot))))
 
