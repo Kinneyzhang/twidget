@@ -201,8 +201,7 @@ Examples:
 
 (defun twidget--apply-reactive-text (text instance-id var-name)
   "Apply reactive tracking to TEXT for INSTANCE-ID with VAR-NAME.
-Returns text with tp.el properties for reactive updates.
-Preserves any existing text properties on TEXT."
+Returns text with tp.el properties for reactive updates."
   ;; Create a unique reactive symbol for this specific text occurrence
   (let* ((text-id (cl-incf twidget-reactive-text-counter))
          (sym (intern (format "twidget--rtext-%d" text-id))))
@@ -214,20 +213,7 @@ Preserves any existing text properties on TEXT."
                (cons sym (gethash key twidget-reactive-symbols))
                twidget-reactive-symbols))
     ;; Use tp-set with the tp-text property type and the reactive symbol reference
-    ;; Preserve existing text properties by using the original text as base
-    (let ((result (tp-set text 'tp-text (intern (format "$%s" sym)))))
-      ;; Copy any existing text properties from the original text that might
-      ;; have been lost during tp-set (e.g., face properties from tp-palette)
-      (when (and (stringp text) (> (length text) 0))
-        (let ((orig-props (text-properties-at 0 text)))
-          (when orig-props
-            ;; Apply original properties to result, but don't override tp-text
-            (dolist (prop-pair (seq-partition orig-props 2))
-              (let ((prop (car prop-pair))
-                    (val (cadr prop-pair)))
-                (unless (eq prop 'tp-text)
-                  (put-text-property 0 (length result) prop val result)))))))
-      result)))
+    (tp-set text 'tp-text (intern (format "$%s" sym)))))
 
 (defun twidget--apply-static-tp-props (text props-plist)
   "Apply static tp.el text properties from PROPS-PLIST to TEXT.
