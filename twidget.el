@@ -72,12 +72,15 @@ every other element (starting from the first) is a keyword."
 (defvar twidget-alist nil
   "Alist of widget definitions: (WIDGET-NAME . DEFINITION).
 Each DEFINITION is a plist with :props, :slot, :render, :setup, :template,
-and :compiled-render keys.
+:compiled-render, and :compiled-render-code keys.
 
 The :compiled-render key holds a pre-compiled render function generated at
 component definition time.  This function is the result of compiling the
 :template into executable Elisp code, similar to how Vue 3 compiles templates
-into render functions.")
+into render functions.
+
+The :compiled-render-code key holds the source code (as a sexp) of the
+compiled render function, useful for debugging and inspection.")
 
 (defvar-local twidget-reactive-data (make-hash-table :test 'equal)
   "Buffer-local hash table for reactive data.
@@ -800,22 +803,25 @@ TEMPLATE is a template sexp (for composite widgets)."
             ;; Parent doesn't extend - use parent render directly
             (setq parent-render (plist-get parent-def :render))))))
     ;; Compile template into render function if this is a composite widget
-    (when (and setup template)
-      (setq compiled-render (twidget--compile-template-to-render-fn template)))
-    (let ((definition (list :props final-props
-                            :slot final-slot
-                            :type final-type
-                            :extends extends
-                            :parent-render parent-render
-                            :render render
-                            :setup setup
-                            :template template
-                            :compiled-render compiled-render))
-          (existing (assoc name twidget-alist)))
-      (if existing
-          (setcdr existing definition)
-        (push (cons name definition) twidget-alist)))
-    (assoc name twidget-alist)))
+    (let ((compiled-render-code nil))
+      (when (and setup template)
+        (setq compiled-render-code (twidget--generate-render-code template))
+        (setq compiled-render (eval compiled-render-code t)))
+      (let ((definition (list :props final-props
+                              :slot final-slot
+                              :type final-type
+                              :extends extends
+                              :parent-render parent-render
+                              :render render
+                              :setup setup
+                              :template template
+                              :compiled-render compiled-render
+                              :compiled-render-code compiled-render-code))
+            (existing (assoc name twidget-alist)))
+        (if existing
+            (setcdr existing definition)
+          (push (cons name definition) twidget-alist)))
+      (assoc name twidget-alist))))
 
 ;;; Property Helpers
 ;; ============================================================================
@@ -874,6 +880,46 @@ Returns \\='inline (default) or \\='block."
     (if definition
         (or (plist-get definition :type) 'inline)
       'inline)))
+
+(defun twidget-get-render-function (widget-name)
+  "Get the compiled render function for widget WIDGET-NAME.
+
+Returns the pre-compiled render function if the widget is a composite
+widget (has both :setup and :template), or nil if:
+- The widget is not defined
+- The widget is a simple widget (uses :render instead of :template)
+- The widget has no compiled render function
+
+The returned function has signature:
+  (lambda (bindings instance-id reactive-bindings) ...)
+
+Example usage:
+  (twidget-get-render-function \\='my-counter)
+  ;; => #<compiled-function ...>
+
+  ;; To see the generated code, use `twidget-get-render-function-code' instead."
+  (let ((definition (cdr (assoc widget-name twidget-alist))))
+    (when definition
+      (plist-get definition :compiled-render))))
+
+(defun twidget-get-render-function-code (widget-name)
+  "Get the source code of the compiled render function for widget WIDGET-NAME.
+
+Returns the Elisp code (as a sexp) that was generated for the widget's
+render function, or nil if the widget has no compiled render function.
+
+This is useful for debugging and understanding what code was generated
+from the template.
+
+Example:
+  (twidget-get-render-function-code \\='my-counter)
+  ;; => (lambda (bindings instance-id reactive-bindings)
+  ;;      (let ((--result-- \"\"))
+  ;;        ...
+  ;;        --result--))"
+  (let ((definition (cdr (assoc widget-name twidget-alist))))
+    (when definition
+      (plist-get definition :compiled-render-code))))
 
 (defun twidget-is-block-widget-p (form)
   "Return non-nil if FORM represents a block-type widget.
