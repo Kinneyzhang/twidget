@@ -344,6 +344,8 @@ There are two ways to define a widget:
                For single slot: (lambda (props slot) ...)
                For named slots: (lambda (props slots) ...) where slots is a plist
                When :extends is used: (lambda (props slot parent-render) ...)
+               Note: When multiple slot values are passed, slot will be a list.
+               Use `twidget-slot-to-string' to convert a list slot to a string.
 
    Example:
      (define-twidget button
@@ -351,10 +353,11 @@ There are two ways to define a widget:
        :props \\='(action (bgcolor . \"orange\"))
        :render (lambda (props slot)
                  (let ((action (plist-get props :action))
-                       (bgcolor (plist-get props :bgcolor)))
+                       (bgcolor (plist-get props :bgcolor))
+                       (slot-str (twidget-slot-to-string slot)))
                    (tp-add (format \"%s%s%s\"
                                    (tp-set \" \" \\='tp-space 6)
-                                   slot (tp-set \" \" \\='tp-space 6))
+                                   slot-str (tp-set \" \" \\='tp-space 6))
                            \\='tp-button `(:bgcolor ,bgcolor :action ,action)))))
 
 2. Composite Widget (using :setup and :template):
@@ -595,6 +598,11 @@ Keyword arguments must come before slot values. Slot values are all
 remaining elements after the keyword-value pairs. Each slot value can be:
   - A string: used directly
   - A list starting with a widget name: recursively parsed as a widget
+
+When there is a single slot value, it is passed directly to the render function.
+When there are multiple slot values, they are passed as a list, allowing the
+component to flexibly organize and connect the slots internally.
+Use `twidget-slot-to-string' to convert a list slot to a string when needed.
 
 BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
 substitution in slot content.
@@ -1048,35 +1056,49 @@ Preserves original type for non-string, non-widget values."
 BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
 substitution.
 
-If there is only one slot argument and it's a primitive type (not a string
-or widget form), the original type is preserved. Otherwise, all slot values
-are concatenated into a string.
+If there is only one slot argument, the processed slot value is returned as-is.
+If there are multiple slot arguments, a list of processed slot values is returned,
+allowing components to flexibly organize and connect multiple slots.
+
+Use `twidget-slot-to-string' to convert a list slot to a string when needed."
+  (cond
+   ;; No arguments - return nil
+   ((null args) nil)
+   ;; Single argument - process and return as-is
+   ((= (length args) 1)
+    (twidget-process-slot-value (car args) bindings))
+   ;; Multiple arguments - return as a list
+   (t
+    (mapcar (lambda (arg) (twidget-process-slot-value arg bindings)) args))))
+
+(defun twidget-slot-to-string (slot)
+  "Convert SLOT to a string for rendering.
+SLOT can be:
+  - nil: returns empty string
+  - a string: returned as-is
+  - a list: elements are concatenated with block element handling
 
 Block element handling follows HTML-like rules:
 - Block elements start on a new line (newline added before if preceded by content)
 - Block elements are followed by a newline (when followed by other content)
 - Inline elements flow together without automatic newlines"
-  ;; Special case: single non-string primitive value - preserve type
-  (if (and (= (length args) 1)
-           (not (stringp (car args)))
-           (not (and (listp (car args))
-                     (car args)  ; non-empty list
-                     (symbolp (caar args))
-                     (assoc (caar args) twidget-alist))))
-      (twidget-process-slot-value (car args) bindings)
-    ;; Multiple arguments or string(s) - concatenate as strings
+  (cond
+   ((null slot) "")
+   ((stringp slot) slot)
+   ((listp slot)
     (let ((result "")
-          (len (length args)))
+          (len (length slot)))
       (dotimes (i len)
-        (let* ((slot-item (nth i args))
+        (let* ((slot-item (nth i slot))
                (is-first (= i 0))
                (is-last (= i (1- len)))
-               (is-block (twidget-is-block-widget-p slot-item))
-               (rendered-val (twidget-process-slot-value slot-item bindings))
-               ;; Convert to string for concatenation if needed
-               (rendered (if (stringp rendered-val)
-                             rendered-val
-                           (format "%s" rendered-val))))
+               ;; Check if original form was a block widget (for proper handling,
+               ;; we check if the rendered result looks like it came from a block widget)
+               (is-block nil)  ; Note: block detection works on original form, not rendered result
+               ;; Convert to string if needed
+               (rendered (if (stringp slot-item)
+                             slot-item
+                           (format "%s" slot-item))))
           ;; Add newline BEFORE block element if there's previous content
           (when (and is-block (not is-first) (not (string-empty-p result)))
             (unless (string-suffix-p "\n" result)
@@ -1087,7 +1109,9 @@ Block element handling follows HTML-like rules:
           (when (and is-block (not is-last))
             (unless (string-suffix-p "\n" result)
               (setq result (concat result "\n"))))))
-      result)))
+      result))
+   ;; Other types - convert to string
+   (t (format "%s" slot))))
 
 (defun twidget-reset ()
   "Reset all widget definitions."

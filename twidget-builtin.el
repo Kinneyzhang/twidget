@@ -47,43 +47,46 @@
 
 ;; span - Inline text container.  Does not add any line breaks.
 (define-twidget span
-  :render (lambda (_props slot) slot))
+  :render (lambda (_props slot)
+            (twidget-slot-to-string slot)))
 
 ;; p - Paragraph block element.
 (define-twidget p
   :type 'block
-  :render (lambda (_props slot) slot))
+  :render (lambda (_props slot)
+            (twidget-slot-to-string slot)))
 
 ;; div - Block container element.
 (define-twidget div
   :type 'block
-  :render (lambda (_props slot) slot))
+  :render (lambda (_props slot)
+            (twidget-slot-to-string slot)))
 
 ;; strong - Bold/strong text.  Applies bold face for emphasis.
 (define-twidget strong
   :render (lambda (_props slot)
-            (tp-set slot 'face 'bold)))
+            (tp-set (twidget-slot-to-string slot) 'face 'bold)))
 
 ;; em - Emphasized (italic) text.
 (define-twidget em
   :render (lambda (_props slot)
-            (tp-set slot 'face 'italic)))
+            (tp-set (twidget-slot-to-string slot) 'face 'italic)))
 
 ;; underline - Underlined text.
 (define-twidget u
   :render (lambda (_props slot)
-            (tp-set slot 'face 'underline)))
+            (tp-set (twidget-slot-to-string slot) 'face 'underline)))
 
 ;; strike - Strikethrough text.
 (define-twidget del
   :render (lambda (_props slot)
-            (tp-set slot 'face '(:strike-through t))))
+            (tp-set (twidget-slot-to-string slot) 'face '(:strike-through t))))
 
 ;; code - Inline code.  Displays text in monospace with subtle background.
 (define-twidget code
   :props '((palette . code))
   :render (lambda (props slot)
-            (tp-set slot
+            (tp-set (twidget-slot-to-string slot)
                     'tp-palette (plist-get props :palette)
                     'face `(:family "monospace"))))
 
@@ -91,7 +94,7 @@
 (define-twidget pre
   :props '((palette . code))
   :render (lambda (props slot)
-            (tp-set slot
+            (tp-set (twidget-slot-to-string slot)
                     'tp-palette (plist-get props :palette)
                     'face `(:family "monospace" :box nil))))
 
@@ -104,7 +107,7 @@
                    (prefix (tp-set (plist-get props :prefix)
                                    'tp-palette
                                    (tp-suffix-symbol palette "-fg"))))
-              (tp-set slot
+              (tp-set (twidget-slot-to-string slot)
                       'line-prefix prefix
                       'wrap-prefix prefix
                       'tp-palette palette
@@ -115,27 +118,27 @@
   :props '((palette . mark-fbg))
   :render (lambda (props slot)
             (let ((palette (plist-get props :palette)))
-              (tp-set slot 'tp-palette palette))))
+              (tp-set (twidget-slot-to-string slot) 'tp-palette palette))))
 
 ;; kbd - Keyboard key representation.  Styled to look like a keyboard key.
 (define-twidget kbd
   :props '((palette . tag))
   :render (lambda (props slot)
-            (tp-set slot 'tp-palette (plist-get props :palette))))
+            (tp-set (twidget-slot-to-string slot) 'tp-palette (plist-get props :palette))))
 
 ;; small - Small text.  Reduces text height.
 (define-twidget small
   :props '((height . 0.85))
   :render (lambda (props slot)
             (let ((height (plist-get props :height)))
-              (tp-set slot 'face `(:height ,height)))))
+              (tp-set (twidget-slot-to-string slot) 'face `(:height ,height)))))
 
 ;; headline - Base heading component with configurable height.
 (define-twidget headline
   :type 'block
   :props '(height)
   :render (lambda (props slot)
-            (tp-set slot 'tp-headline (plist-get props :height))))
+            (tp-set (twidget-slot-to-string slot) 'tp-headline (plist-get props :height))))
 
 ;; h1 - Level 1 heading (largest).  Height: 2.0x
 (define-twidget h1
@@ -181,15 +184,16 @@
 
 ;; br - Line break.  Inserts a newline character.
 ;; Slot: Optional number of line breaks (default: 1).
-;;   Accepts: number, string representation of a number, or nil.
+;;   Accepts: number, string representation of a number, list, or nil.
 ;;   Examples: (br), (br 3), (br "2")
 (define-twidget br
   :render (lambda (_props slot)
-            (let ((num (cond
-                        ((null slot) 1)
-                        ((stringp slot) (string-to-number slot))
-                        ((numberp slot) slot)
-                        (t 1))))
+            (let* ((slot-val (if (listp slot) (car slot) slot))
+                   (num (cond
+                         ((null slot-val) 1)
+                         ((stringp slot-val) (string-to-number slot-val))
+                         ((numberp slot-val) slot-val)
+                         (t 1))))
               (make-string num ?\n))))
 
 ;; hr - Horizontal rule/divider.  Creates a visual separator line.
@@ -212,7 +216,8 @@
 ;; ul - Unordered list container.  Wraps list items with bullet points.
 (define-twidget ul
   :type 'block
-  :render (lambda (_props slot) slot))
+  :render (lambda (_props slot)
+            (twidget-slot-to-string slot)))
 
 ;; li - List item.  A single item in a list with a bullet or number.
 (define-twidget li
@@ -220,13 +225,13 @@
   :props '((bullet . "•"))
   :render (lambda (props slot)
             (let ((bullet (plist-get props :bullet)))
-              (concat bullet " " slot))))
+              (concat bullet " " (twidget-slot-to-string slot)))))
 
 ;; link - Clickable text link with optional URL.
 (define-twidget link
   :props '((text . nil))
   :render (lambda (props slot)
-            (let* ((url slot)
+            (let* ((url (twidget-slot-to-string slot))
                    (text (or (plist-get props :text) url)))
               (tp-set text
                       'tp-link t
@@ -242,7 +247,8 @@
             (let* ((btn-type (plist-get props :type))
                    (padding (plist-get props :padding))
                    (space (tp-set " " 'tp-space padding))
-                   (btn-text (format "%s%s%s" space slot space)))
+                   (slot-str (twidget-slot-to-string slot))
+                   (btn-text (format "%s%s%s" space slot-str space)))
               (tp-set btn-text
                       'tp-button btn-type
                       'mouse-face 'highlight
@@ -255,7 +261,8 @@
             (let* ((type (plist-get props :type))
                    (padding (plist-get props :padding))
                    (space (tp-set " " 'tp-space padding))
-                   (badge-text (format "%s%s%s" space slot space)))
+                   (slot-str (twidget-slot-to-string slot))
+                   (badge-text (format "%s%s%s" space slot-str space)))
               (tp-set badge-text
                       'tp-palette
                       (intern (concat "button-" (symbol-name type)))))))
@@ -270,7 +277,8 @@
            (let* ((todo-bullet (plist-get props :todo-bullet))
                   (done-bullet (plist-get props :done-bullet))
                   (bullet (twidget-ref todo-bullet))
-                  (content (twidget-ref slot)))
+                  (slot-str (twidget-slot-to-string slot))
+                  (content (twidget-ref slot-str)))
              (list :bullet bullet
                    :content content
                    :change-status
@@ -297,9 +305,14 @@
   :props '((todo . "○")
            (done . "◉"))
   :setup (lambda (props slot)
-           (list :todo (plist-get props :todo)
-                 :done (plist-get props :done)
-                 :items slot))
+           ;; slot can be:
+           ;; - a list of items when multiple slot args are passed
+           ;; - a single item when one slot arg is passed
+           ;; Ensure items is always a list for :for iteration
+           (let ((items (if (listp slot) slot (list slot))))
+             (list :todo (plist-get props :todo)
+                   :done (plist-get props :done)
+                   :items items)))
   :template '(ul (checkbox
                   :todo-bullet "{todo}"
                   :done-bullet "{done}"
