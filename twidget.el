@@ -674,11 +674,18 @@ REACTIVE-BINDINGS is the plist from :setup for event handlers."
 
 (defun twidget--resolve-prop-value (value bindings)
   "Resolve a property VALUE using BINDINGS.
-If VALUE is a function (compiled template), call it to get the value.
+If VALUE is a compiled template function, call it with bindings.
+If VALUE is a string with placeholders, substitute them.
 Otherwise return VALUE as-is."
-  (if (functionp value)
-      (funcall value bindings nil nil)
-    value))
+  (cond
+   ;; Compiled template function (rare for props)
+   ((functionp value)
+    (funcall value bindings nil nil))
+   ;; String with placeholder - substitute
+   ((and (stringp value) (string-match-p "{[^}]+}" value))
+    (twidget-substitute-placeholders value bindings))
+   ;; Other values - return as-is
+   (t value)))
 
 (defun twidget--process-rendered-slots (rendered-slots)
   "Process RENDERED-SLOTS list into appropriate slot value.
