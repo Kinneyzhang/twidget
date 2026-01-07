@@ -53,9 +53,7 @@
 
 (define-twidget col
   :render (lambda (_props slot)
-            (if (stringp slot)
-                slot
-              (string-join slot "\n"))))
+            (string-join slot "\n")))
 
 ;; span - Inline text container.  Does not add any line breaks.
 (define-twidget span

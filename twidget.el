@@ -350,10 +350,13 @@ There are two ways to define a widget:
                         by other content.
      :extends - Symbol of a parent widget to inherit from.
      :render - A lambda that returns the rendered string.
-               For single slot: (lambda (props slot) ...)
+               Parameters follow consistent types:
+               - props: plist type (e.g., (:color \"red\" :size 10))
+               - slot: list type (always a list, even for single value)
+               For single slot: (lambda (props slot) ...) where slot is a list
                For named slots: (lambda (props slots) ...) where slots is a plist
+                                with each value being a list
                When :extends is used: (lambda (props slot parent-render) ...)
-               Note: When multiple slot values are passed, slot will be a list.
                Use `twidget-slot-to-string' to convert a list slot to a string.
 
    Example:
@@ -1087,9 +1090,9 @@ Returns the rendered string with text properties applied."
             ;; Slot not supported - warn about ignored arguments
             (warn "twidget-parse: Widget `%s' does not support slot content. \
 Ignoring arguments: %S" widget-name args)))
-        ;; Combine default slot parts if any
+        ;; Combine default slot parts if any (as a list, not concatenated)
         (when (and named-slots-p slot-parts)
-          (push (cons :default (apply #'concat (nreverse slot-parts)))
+          (push (cons :default (nreverse slot-parts))
                 collected-named-slots))
         ;; Build named slots plist if using named slots
         (when named-slots-p
@@ -1455,26 +1458,32 @@ When the widget uses :for directive, returns a list of rendered items."
 BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
 substitution.
 
-If there is only one slot argument, the processed slot value is returned as-is.
-If there are multiple slot arguments, a list of processed slot values is returned,
-allowing components to flexibly organize and connect multiple slots.
+Always returns a list of processed slot values, even for single arguments.
+This ensures consistent slot type handling across all components.
+- props: plist type
+- slot: list type (always)
 
 Use `twidget-slot-to-string' to convert a list slot to a string when needed."
   (cond
-   ;; No arguments - return nil
+   ;; No arguments - return empty list
    ((null args) nil)
-   ;; Single argument - process and return as-is
-   ((= (length args) 1)
-    (twidget-process-slot-value (car args) bindings))
-   ;; Multiple arguments - return as a list
+   ;; Always return a list of processed values
    (t
-    (mapcar (lambda (arg) (twidget-process-slot-value arg bindings)) args))))
+    (let ((result nil))
+      (dolist (arg args)
+        (let ((processed (twidget-process-slot-value arg bindings)))
+          ;; If processed value is a list (from :for), flatten it
+          (if (and (listp processed) (not (null processed)))
+              (setq result (append result processed))
+            (when processed
+              (push processed result)))))
+      (nreverse result)))))
 
 (defun twidget-slot-to-string (slot)
   "Convert SLOT to a string for rendering.
+SLOT is always a list type (never a string directly).
 SLOT can be:
   - nil: returns empty string
-  - a string: returned as-is
   - a list: elements are converted to strings and concatenated
 
 Block element handling is applied when concatenating list elements:
@@ -1483,7 +1492,6 @@ Block element handling is applied when concatenating list elements:
 Block elements are detected by the `twidget-block-element' text property."
   (cond
    ((null slot) "")
-   ((stringp slot) slot)
    ((listp slot)
     (let ((result "")
           (len (length slot)))
@@ -1509,7 +1517,7 @@ Block elements are detected by the `twidget-block-element' text property."
             (unless (string-suffix-p "\n" result)
               (setq result (concat result "\n"))))))
       result))
-   ;; Other types - convert to string
+   ;; Other types - convert to string (fallback for edge cases)
    (t (format "%s" slot))))
 
 (defun twidget-reset ()
