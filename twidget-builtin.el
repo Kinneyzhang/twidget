@@ -302,8 +302,10 @@
                    :change-status
                    ;; Use closure-captured refs directly with twidget-ref-set
                    ;; instead of global twidget-get/twidget-set to ensure
-                   ;; each checkbox instance operates on its own state
+                   ;; each checkbox instance operates on its own state.
+                   ;; Made interactive to avoid wrapper lambda overhead in keymap.
                    (lambda ()
+                     (interactive)
                      (let ((curr-bullet (twidget-ref-value bullet))
                            (curr-content (twidget-ref-value content)))
                        (if (string= curr-bullet todo-bullet)

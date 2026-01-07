@@ -2178,20 +2178,31 @@ Returns a lambda function that can be used as an event handler."
   (let ((stmt-type (plist-get parsed-expr :type)))
     (pcase stmt-type
       ;; Method reference - look up in bindings and return as callable
+      ;; Optimization: if method-fn is already an interactive command,
+      ;; use it directly instead of wrapping in another lambda.
+      ;; This avoids creating an extra closure layer in the keymap.
       ('method
        (let* ((method-name (plist-get parsed-expr :name))
               (method-key (intern (format ":%s" method-name)))
               (method-fn (plist-get bindings-plist method-key)))
-         (if method-fn
-             (lambda ()
-               (interactive)
-               (funcall method-fn))
-           ;; Method not found in bindings - could be a global function
+         (cond
+          ;; Method found and already interactive - use directly
+          ((and method-fn (commandp method-fn))
+           method-fn)
+          ;; Method found but not interactive - wrap it
+          (method-fn
+           (lambda ()
+             (interactive)
+             (funcall method-fn)))
+          ;; Method not found in bindings - could be a global function
+          (t
            (let ((global-fn (intern method-name)))
-             (lambda ()
-               (interactive)
-               (when (fboundp global-fn)
-                 (funcall global-fn)))))))
+             (if (commandp global-fn)
+                 global-fn
+               (lambda ()
+                 (interactive)
+                 (when (fboundp global-fn)
+                   (funcall global-fn)))))))))
 
       ;; Method call with arguments
       ('method-call
