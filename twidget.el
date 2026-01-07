@@ -2595,11 +2595,32 @@ Handles atoms (symbols, numbers, strings) and parenthesized expressions."
             (cl-incf i))
           i))))))
 
+(defun twidget--valid-click-position-p (event)
+  "Check if mouse EVENT occurred on actual text with our keymap.
+Returns non-nil if the click position is valid (on text, not after it).
+Returns nil if EVENT has no valid position (e.g., click on margin)."
+  (let* ((pos-info (event-start event))
+         (pos (posn-point pos-info)))
+    ;; pos is nil if click was not on text (e.g., on margin or fringes)
+    (and pos
+         ;; Check that we're not clicking past the end of the line
+         (<= pos (save-excursion
+                   (goto-char pos)
+                   (line-end-position)))
+         ;; Check that the character at click position has our keymap property
+         (get-text-property pos 'keymap))))
+
 (defun twidget--create-click-handler (handler-fn)
   "Create a keymap with HANDLER-FN bound to mouse click.
-Returns a keymap suitable for use as a text property."
+Returns a keymap suitable for use as a text property.
+The mouse-1 handler validates that the click is on actual text,
+not after the text on the same line."
   (let ((map (make-sparse-keymap)))
-    (define-key map [mouse-1] handler-fn)
+    (define-key map [mouse-1]
+                (lambda (event)
+                  (interactive "e")
+                  (when (twidget--valid-click-position-p event)
+                    (funcall handler-fn))))
     (define-key map (kbd "RET") handler-fn)
     (define-key map (kbd "<return>") handler-fn)
     map))
