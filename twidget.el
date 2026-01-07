@@ -1235,7 +1235,8 @@ INSTANCE-ID is used for reactive tracking.
 Only applies reactive tracking to individual placeholder values, not the entire string.
 Supports dot notation for nested access:
   {info.name} - plist property access
-  {items.0} - list index access"
+  {items.0} - list index access
+Preserves text properties on string values."
   (let ((result "")
         (start 0))
     ;; Process string segment by segment
@@ -1257,7 +1258,10 @@ Supports dot notation for nested access:
             (let* ((base-value (cdr binding))
                    ;; Get nested value using accessors
                    (actual-value (twidget--get-nested-value base-value accessors))
-                   (value-str (format "%s" actual-value)))
+                   ;; Preserve text properties if value is already a string
+                   (value-str (if (stringp actual-value)
+                                  actual-value
+                                (format "%s" actual-value))))
               (if ref-info
                   ;; This is a reactive ref - apply reactive text tracking
                   ;; Use full var-expr (e.g., "info.name") as the key for granular updates
@@ -1737,27 +1741,40 @@ SUB-VALUE is the new value for the specific property when ACCESSOR is provided."
 (defun twidget-substitute-placeholders (str bindings)
   "Substitute {variable} placeholders in STR with values from BINDINGS.
 BINDINGS is an alist of (VAR-NAME . VALUE) pairs.
+Preserves text properties on string values.
 Supports dot notation for nested access:
   {info.name} - plist property access
   {items.0} - list index access
   {data.0.name} - multi-level access"
   (if (stringp str)
-      (replace-regexp-in-string
-       "{\\([^}]+\\)}"
-       (lambda (match)
-         ;; Extract the variable expression from the first capture group
-         (let* ((var-expr (match-string 1 match))
-                ;; Parse dot notation: "data.0.name" -> ("data" 0 :name)
-                (parsed (twidget--parse-dot-notation var-expr))
-                (base-var (car parsed))
-                (accessors (cdr parsed))
-                (binding (assoc base-var bindings)))
-           (if binding
-               (let* ((base-value (cdr binding))
-                      (actual-value (twidget--get-nested-value base-value accessors)))
-                 (format "%s" actual-value))
-             match)))
-       str t t)
+      (let ((result "")
+            (start 0))
+        ;; Process string segment by segment to preserve text properties
+        (while (string-match "{\\([^}]+\\)}" str start)
+          (let* ((match-start (match-beginning 0))
+                 (match-end (match-end 0))
+                 (var-expr (match-string 1 str))
+                 ;; Parse dot notation: "data.0.name" -> ("data" 0 :name)
+                 (parsed (twidget--parse-dot-notation var-expr))
+                 (base-var (car parsed))
+                 (accessors (cdr parsed))
+                 (binding (assoc base-var bindings)))
+            ;; Add the non-placeholder part before this match
+            (setq result (concat result (substring str start match-start)))
+            ;; Add the placeholder value
+            (if binding
+                (let* ((base-value (cdr binding))
+                       (actual-value (twidget--get-nested-value base-value accessors))
+                       ;; Preserve text properties if value is already a string
+                       (value-str (if (stringp actual-value)
+                                      actual-value
+                                    (format "%s" actual-value))))
+                  (setq result (concat result value-str)))
+              ;; No binding found - keep the placeholder as is
+              (setq result (concat result (substring str match-start match-end))))
+            (setq start match-end)))
+        ;; Add the remaining part after the last match
+        (concat result (substring str start)))
     str))
 
 (defconst twidget--for-expression-rx
