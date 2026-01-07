@@ -2177,7 +2177,7 @@ BINDINGS-PLIST is the reactive bindings from :setup, containing methods and refs
 Returns a lambda function that can be used as an event handler."
   (let ((stmt-type (plist-get parsed-expr :type)))
     (pcase stmt-type
-      ;; Method reference - look up in bindings and return as callable
+      ;; Method reference - look up in bindings and return as callable.
       ;; Optimization: if method-fn is already an interactive command,
       ;; use it directly instead of wrapping in another lambda.
       ;; This avoids creating an extra closure layer in the keymap.
