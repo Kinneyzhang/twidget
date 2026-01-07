@@ -478,8 +478,9 @@ There are two ways to define a widget:
   "Hash table of directive compilers.
 Keys are directive keywords (e.g., :for, :if).
 Values are compiler functions with signature:
-  (directive-value widget-name remaining-args body-generator)
-The function should return Elisp code that implements the directive.")
+  (directive-value widget-name remaining-args body-code)
+Where body-code is the already-generated Elisp code for the inner content.
+The function should return Elisp code that wraps the body-code.")
 
 (defun twidget--register-directive-compiler (directive compiler-fn)
   "Register COMPILER-FN as the compiler for DIRECTIVE.
@@ -499,8 +500,9 @@ COMPILER-FN is a function that generates code for the directive."
 ;; Register the :for directive compiler
 (twidget--register-directive-compiler
  :for
- (lambda (for-expr _widget-name _remaining-args body-generator)
-   "Compile :for directive into a dolist loop."
+ (lambda (for-expr _widget-name _remaining-args body-code)
+   "Compile :for directive into a dolist loop.
+BODY-CODE is the generated Elisp code for rendering the inner content."
    (let ((parsed (twidget-parse-for-expression for-expr)))
      (if parsed
          (let* ((loop-var (car parsed))
@@ -513,7 +515,7 @@ COMPILER-FN is a function that generates code for the directive."
               (if (listp ,collection-sym)
                   (dolist (,loop-var-sym ,collection-sym)
                     (let ((bindings (cons (cons ,loop-var ,loop-var-sym) bindings)))
-                      (setq ,result-sym (concat ,result-sym ,body-generator))))
+                      (setq ,result-sym (concat ,result-sym ,body-code))))
                 (warn "twidget: :for collection `%s' is not a list" ,collection-name))
               ,result-sym))
        `(progn
@@ -523,38 +525,41 @@ COMPILER-FN is a function that generates code for the directive."
 ;; Register the :if directive compiler
 (twidget--register-directive-compiler
  :if
- (lambda (condition-expr _widget-name _remaining-args body-generator)
-   "Compile :if directive into a conditional."
-   `(if (twidget--compile-eval-condition ,condition-expr bindings reactive-bindings)
-        ,body-generator
+ (lambda (condition-expr _widget-name _remaining-args body-code)
+   "Compile :if directive into a conditional.
+BODY-CODE is the generated Elisp code for rendering the inner content."
+   `(if (twidget--eval-condition-expr ,condition-expr bindings)
+        ,body-code
       "")))
 
 ;; Register the :show directive compiler (similar to :if but could add CSS-like hiding)
 (twidget--register-directive-compiler
  :show
- (lambda (condition-expr _widget-name _remaining-args body-generator)
-   "Compile :show directive - renders but may mark as hidden."
-   `(if (twidget--compile-eval-condition ,condition-expr bindings reactive-bindings)
-        ,body-generator
+ (lambda (condition-expr _widget-name _remaining-args body-code)
+   "Compile :show directive - renders but may mark as hidden.
+BODY-CODE is the generated Elisp code for rendering the inner content."
+   `(if (twidget--eval-condition-expr ,condition-expr bindings)
+        ,body-code
       "")))
 
-(defun twidget--compile-eval-condition (condition-expr bindings-var reactive-bindings-var)
-  "Evaluate CONDITION-EXPR at runtime using bindings.
+(defun twidget--eval-condition-expr (condition-expr bindings)
+  "Evaluate CONDITION-EXPR at runtime using BINDINGS.
 CONDITION-EXPR is a string like \"count > 0\" or \"visible\".
+BINDINGS is an alist of (VAR-NAME . VALUE) pairs.
 Returns non-nil if the condition is truthy."
   (let ((trimmed (string-trim condition-expr)))
     (cond
      ;; Simple variable reference - check if truthy
      ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)$" trimmed)
       (let* ((var-name trimmed)
-             (binding (assoc var-name bindings-var)))
+             (binding (assoc var-name bindings)))
         (when binding
           (let ((val (cdr binding)))
             (and val (not (equal val 0)) (not (equal val "")))))))
      ;; Negation: !var
      ((string-match "^!\\s*\\([a-zA-Z_][a-zA-Z0-9_-]*\\)$" trimmed)
       (let* ((var-name (match-string 1 trimmed))
-             (binding (assoc var-name bindings-var)))
+             (binding (assoc var-name bindings)))
         (if binding
             (let ((val (cdr binding)))
               (not (and val (not (equal val 0)) (not (equal val "")))))
@@ -564,7 +569,7 @@ Returns non-nil if the condition is truthy."
       (let* ((var-name (match-string 1 trimmed))
              (operator (match-string 2 trimmed))
              (value-str (string-trim (match-string 3 trimmed)))
-             (binding (assoc var-name bindings-var))
+             (binding (assoc var-name bindings))
              (var-value (when binding (cdr binding)))
              (compare-value (twidget--parse-literal-value value-str)))
         (pcase operator
