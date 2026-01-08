@@ -199,8 +199,11 @@ Examples:
          (t (warn "twidget--get-nested-value: Unknown accessor type: %S" accessor))))
       current)))
 
-(defun twidget--apply-reactive-text (text instance-id var-name)
+(defun twidget--apply-reactive-text (text instance-id var-name &optional extra-props)
   "Apply reactive tracking to TEXT for INSTANCE-ID with VAR-NAME.
+EXTRA-PROPS is an optional plist of additional properties to include in the
+reactive layer (e.g., keymap, pointer, rear-nonsticky from parent event handlers).
+These properties will be preserved when the reactive text is updated.
 Returns text with tp.el properties for reactive updates."
   ;; Create a unique reactive symbol for this specific text occurrence
   (let* ((text-id (cl-incf twidget-reactive-text-counter))
@@ -213,7 +216,10 @@ Returns text with tp.el properties for reactive updates."
                (cons sym (gethash key twidget-reactive-symbols))
                twidget-reactive-symbols))
     ;; Use tp-set with the tp-text property type and the reactive symbol reference
-    (tp-set text 'tp-text (intern (format "$%s" sym)))))
+    ;; Include extra-props (like keymap, pointer) so they are preserved during updates
+    (if extra-props
+        (apply #'tp-set text 'tp-text (intern (format "$%s" sym)) extra-props)
+      (tp-set text 'tp-text (intern (format "$%s" sym))))))
 
 (defun twidget--apply-static-tp-props (text props-plist)
   "Apply static tp.el text properties from PROPS-PLIST to TEXT.
@@ -1229,9 +1235,11 @@ Block element handling follows HTML-like rules:
             (setq result (concat result "\n"))))))
     result))
 
-(defun twidget--expand-template-string (str bindings instance-id)
+(defun twidget--expand-template-string (str bindings instance-id &optional event-props)
   "Expand STR template string with BINDINGS.
 INSTANCE-ID is used for reactive tracking.
+EVENT-PROPS is an optional plist of event properties (keymap, pointer, etc.)
+to include in reactive text layers so they are preserved during updates.
 Only applies reactive tracking to individual placeholder values, not the entire string.
 Supports dot notation for nested access:
   {info.name} - plist property access
@@ -1265,8 +1273,9 @@ Preserves text properties on string values."
               (if ref-info
                   ;; This is a reactive ref - apply reactive text tracking
                   ;; Use full var-expr (e.g., "info.name") as the key for granular updates
+                  ;; Pass event-props so they are included in the reactive layer
                   (setq result (concat result
-                                       (twidget--apply-reactive-text value-str instance-id var-expr)))
+                                       (twidget--apply-reactive-text value-str instance-id var-expr event-props)))
                 ;; Not a reactive ref - just add the value
                 (setq result (concat result value-str))))
           ;; No binding found - keep the placeholder as is
@@ -1357,63 +1366,87 @@ Returns a plist with:
   (let ((result nil)
         (event-props nil)
         (tp-props-info nil)
-        (has-for nil))
-    ;; First pass: check if :for directive is present
+        (has-for nil)
+        (non-event-args nil))
+    ;; First pass: check if :for directive is present and extract event-props
+    ;; We need to extract event-props first so we can pass them to template arg processing
     (let ((check-args args))
-      (while (and check-args (keywordp (car check-args)))
-        (when (eq (car check-args) :for)
-          (setq has-for t))
-        (setq check-args (cddr check-args))))
-    ;; Second pass: process arguments and extract events
-    (while args
-      (let ((arg (car args)))
-        (cond
-         ;; Keyword argument
-         ((keywordp arg)
+      (while check-args
+        (let ((arg (car check-args)))
           (cond
            ;; Event property (:on-click, etc.)
-           ((twidget--is-event-prop-p arg)
+           ((and (keywordp arg) (twidget--is-event-prop-p arg))
             (let ((event-type (twidget--is-event-prop-p arg)))
-              (setq args (cdr args))
-              (when args
-                (let* ((handler-expr (car args))
+              (setq check-args (cdr check-args))
+              (when check-args
+                (let* ((handler-expr (car check-args))
                        (compiled-props
                         (twidget--process-event-prop 
                          event-type handler-expr reactive-bindings)))
                   (when compiled-props
                     (setq event-props (append event-props compiled-props))))
-                (setq args (cdr args)))))
-           ;; tp-props - plist of tp.el text properties
-           ((eq arg :tp-props)
-            (setq args (cdr args))
-            (when args
-              (setq tp-props-info (twidget--parse-tp-props-value (car args) reactive-bindings))
-              (setq args (cdr args))))
-           ;; Regular keyword - keep as is
+                (setq check-args (cdr check-args)))))
+           ;; tp-props - extract for later
+           ((and (keywordp arg) (eq arg :tp-props))
+            (setq check-args (cdr check-args))
+            (when check-args
+              (setq tp-props-info (twidget--parse-tp-props-value (car check-args) reactive-bindings))
+              (setq check-args (cdr check-args))))
+           ;; :for directive
+           ((and (keywordp arg) (eq arg :for))
+            (setq has-for t)
+            ;; Collect this arg pair for second pass
+            (push arg non-event-args)
+            (setq check-args (cdr check-args))
+            (when check-args
+              (push (car check-args) non-event-args)
+              (setq check-args (cdr check-args))))
+           ;; Other keyword args
+           ((keywordp arg)
+            (push arg non-event-args)
+            (setq check-args (cdr check-args))
+            (when check-args
+              (push (car check-args) non-event-args)
+              (setq check-args (cdr check-args))))
+           ;; Non-keyword args
            (t
-            (push arg result)
-            (setq args (cdr args))
-            (when args
-              (if (eq arg :for)
-                  (push (car args) result)
-                (push (twidget--process-template-arg (car args) bindings instance-id reactive-bindings) result))
-              (setq args (cdr args))))))
+            (push arg non-event-args)
+            (setq check-args (cdr check-args)))))))
+    ;; Reverse non-event-args to restore original order
+    (setq non-event-args (nreverse non-event-args))
+    ;; Second pass: process non-event arguments with event-props available
+    ;; Event-props will be passed to reactive text so they are preserved during updates
+    (while non-event-args
+      (let ((arg (car non-event-args)))
+        (cond
+         ;; Keyword argument
+         ((keywordp arg)
+          (push arg result)
+          (setq non-event-args (cdr non-event-args))
+          (when non-event-args
+            (if (eq arg :for)
+                (push (car non-event-args) result)
+              ;; Pass event-props to template arg processing
+              (push (twidget--process-template-arg (car non-event-args) bindings instance-id reactive-bindings event-props) result))
+            (setq non-event-args (cdr non-event-args))))
          ;; Non-keyword (slot) arguments
          (t
           (if has-for
               (push arg result)
-            (push (twidget--process-template-arg arg bindings instance-id reactive-bindings) result))
-          (setq args (cdr args))))))
+            ;; Pass event-props to template arg processing
+            (push (twidget--process-template-arg arg bindings instance-id reactive-bindings event-props) result))
+          (setq non-event-args (cdr non-event-args))))))
     (list :args (nreverse result) :event-props event-props :tp-props-info tp-props-info)))
 
-(defun twidget--process-template-arg (arg bindings instance-id &optional reactive-bindings)
+(defun twidget--process-template-arg (arg bindings instance-id &optional reactive-bindings event-props)
   "Process a single template ARG with BINDINGS.
 INSTANCE-ID is used for reactive tracking.
-REACTIVE-BINDINGS is the original plist from :setup, used for event handlers."
+REACTIVE-BINDINGS is the original plist from :setup, used for event handlers.
+EVENT-PROPS is an optional plist of event properties to include in reactive text."
   (cond
    ;; String - substitute placeholders
    ((stringp arg)
-    (twidget--expand-template-string arg bindings instance-id))
+    (twidget--expand-template-string arg bindings instance-id event-props))
    ;; Widget form - expand it
    ((and (listp arg)
          (symbolp (car arg))
@@ -1426,7 +1459,7 @@ REACTIVE-BINDINGS is the original plist from :setup, used for event handlers."
    ;; Other list - might need recursive processing
    ((listp arg)
     (mapcar (lambda (x)
-              (twidget--process-template-arg x bindings instance-id reactive-bindings))
+              (twidget--process-template-arg x bindings instance-id reactive-bindings event-props))
             arg))
    ;; Other - return as is
    (t arg)))
