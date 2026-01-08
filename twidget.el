@@ -1696,36 +1696,38 @@ Examples:
                  (when bindings
                    (let ((ref (plist-get bindings (intern (format ":%s" key)))))
                      (when (twidget-ref-p ref)
-                       (let ((new-value
-                              (cond
-                               ;; No key/index - set whole value
-                               ((null key-or-index) value)
-                               ;; Keyword access for plist
-                               ((keywordp key-or-index)
-                                (let ((current (twidget-ref-value ref)))
-                                  (if (or (null current) (plistp current))
-                                      (plist-put (copy-sequence current) key-or-index value)
-                                    (error "Cannot use keyword access on non-plist value"))))
-                               ;; Integer access for list
-                               ((integerp key-or-index)
-                                (let ((current (twidget-ref-value ref)))
-                                  (cond
-                                   ((not (listp current))
-                                    (error "Cannot use index access on non-list value"))
-                                   (t
-                                    (let ((len (length current)))
-                                      (if (or (< key-or-index 0) (>= key-or-index len))
-                                          (error "Index %d out of bounds for list of length %d"
-                                                 key-or-index len)
-                                        (let ((new-list (copy-sequence current)))
-                                          (setf (nth key-or-index new-list) value)
-                                          new-list)))))))
-                               (t (error "KEY-OR-INDEX must be a keyword or integer")))))
+                       ;; Capture old value before computing new value
+                       (let* ((old-value (twidget-ref-value ref))
+                              (new-value
+                               (cond
+                                ;; No key/index - set whole value
+                                ((null key-or-index) value)
+                                ;; Keyword access for plist
+                                ((keywordp key-or-index)
+                                 (let ((current (twidget-ref-value ref)))
+                                   (if (or (null current) (plistp current))
+                                       (plist-put (copy-sequence current) key-or-index value)
+                                     (error "Cannot use keyword access on non-plist value"))))
+                                ;; Integer access for list
+                                ((integerp key-or-index)
+                                 (let ((current (twidget-ref-value ref)))
+                                   (cond
+                                    ((not (listp current))
+                                     (error "Cannot use index access on non-list value"))
+                                    (t
+                                     (let ((len (length current)))
+                                       (if (or (< key-or-index 0) (>= key-or-index len))
+                                           (error "Index %d out of bounds for list of length %d"
+                                                  key-or-index len)
+                                         (let ((new-list (copy-sequence current)))
+                                           (setf (nth key-or-index new-list) value)
+                                           new-list)))))))
+                                (t (error "KEY-OR-INDEX must be a keyword or integer")))))
                          ;; Update the ref value
                          (setf (twidget-ref-value ref) new-value)
-                         ;; Notify watchers
+                         ;; Notify watchers with both new and old values
                          (dolist (watcher (twidget-ref-watchers ref))
-                           (funcall watcher new-value))
+                           (funcall watcher new-value old-value))
                          ;; Trigger buffer update with accessor info for incremental updates
                          (twidget--trigger-update inst-key key new-value key-or-index value)))))))
              twidget-instances)))
@@ -1841,20 +1843,22 @@ and variable name for REF and triggers proper reactive updates.
 Use this in :setup closures that have direct access to the ref object."
   (unless (twidget-ref-p ref)
     (error "twidget-ref-set: REF must be a twidget-ref object"))
-  ;; Update the ref value
-  (setf (twidget-ref-value ref) value)
-  ;; Notify watchers
-  (dolist (watcher (twidget-ref-watchers ref))
-    (funcall watcher value))
-  ;; Find the instance-id and var-name for this ref by searching the registry
-  (catch 'done
-    (maphash (lambda (key stored-ref)
-               (when (eq stored-ref ref)
-                 (let ((instance-id (car key))
-                       (var-name (cdr key)))
-                   (twidget--trigger-update instance-id var-name value)
-                   (throw 'done t))))
-             twidget-ref-registry)))
+  ;; Capture old value before updating
+  (let ((old-value (twidget-ref-value ref)))
+    ;; Update the ref value
+    (setf (twidget-ref-value ref) value)
+    ;; Notify watchers with both new and old values
+    (dolist (watcher (twidget-ref-watchers ref))
+      (funcall watcher value old-value))
+    ;; Find the instance-id and var-name for this ref by searching the registry
+    (catch 'done
+      (maphash (lambda (key stored-ref)
+                 (when (eq stored-ref ref)
+                   (let ((instance-id (car key))
+                         (var-name (cdr key)))
+                     (twidget--trigger-update instance-id var-name value)
+                     (throw 'done t))))
+               twidget-ref-registry))))
 
 (defun twidget-inc (sym num)
   "Increment the numeric value stored in reactive variable SYM by NUM.
@@ -1897,6 +1901,54 @@ Returns the twidget-ref object."
       ;; Not found, create a new one if initial value provided
       (when initial-value
         (twidget-ref initial-value)))))
+
+(defun twidget-watch (ref callback &optional immediate)
+  "Register CALLBACK as a watcher on REF.
+REF must be a twidget-ref object created by `twidget-ref'.
+CALLBACK is a function that takes two arguments: (NEW-VALUE OLD-VALUE).
+If IMMEDIATE is non-nil, the callback is also called immediately with
+the current value as both new and old value.
+
+This implements the \"on-change\" functionality for reactive values.
+When the ref's value changes (via `twidget-set' or `twidget-ref-set'),
+the CALLBACK will be invoked with the new and old values.
+
+Example usage in :setup:
+
+  :setup (lambda (_props _slot)
+           (let ((count (twidget-ref 0)))
+             ;; Register on-change handler
+             (twidget-watch count
+                            (lambda (new-value old-value)
+                              (message \"Count changed from %s to %s\"
+                                       old-value new-value)))
+             (list :count count)))
+
+Returns the REF for chaining."
+  (unless (twidget-ref-p ref)
+    (error "twidget-watch: REF must be a twidget-ref object"))
+  (unless (functionp callback)
+    (error "twidget-watch: CALLBACK must be a function"))
+  ;; Add callback to the watchers list
+  (setf (twidget-ref-watchers ref)
+        (cons callback (twidget-ref-watchers ref)))
+  ;; Call immediately if requested
+  (when immediate
+    (let ((current-value (twidget-ref-value ref)))
+      (funcall callback current-value current-value)))
+  ;; Return ref for chaining
+  ref)
+
+(defun twidget-unwatch (ref callback)
+  "Remove CALLBACK from the watchers list of REF.
+REF must be a twidget-ref object.
+CALLBACK is the function to remove.
+Returns the REF."
+  (unless (twidget-ref-p ref)
+    (error "twidget-unwatch: REF must be a twidget-ref object"))
+  (setf (twidget-ref-watchers ref)
+        (delete callback (twidget-ref-watchers ref)))
+  ref)
 
 ;;; Event System
 ;; ============================================================================

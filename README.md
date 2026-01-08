@@ -402,6 +402,8 @@ Use dot notation for nested access:
 | `twidget-set` | Set reactive value | `(twidget-set 'count 10)` |
 | `twidget-inc` | Increment numeric value | `(twidget-inc 'count 1)` |
 | `twidget-dec` | Decrement numeric value | `(twidget-dec 'count 1)` |
+| `twidget-watch` | Register on-change handler | `(twidget-watch ref callback)` |
+| `twidget-unwatch` | Remove on-change handler | `(twidget-unwatch ref callback)` |
 
 #### Accessing Nested Properties
 
@@ -413,6 +415,34 @@ Use dot notation for nested access:
 ;; Set nested property
 (twidget-set 'user "Jane" :name)  ; Set :name in plist
 (twidget-set 'items "x" 0)        ; Set first element in list
+```
+
+#### Watching for Changes (on-change)
+
+Use `twidget-watch` to register a callback that is triggered when a reactive value changes:
+
+```elisp
+(define-twidget watched-counter
+  :setup (lambda (_props _slot)
+           (let ((count (twidget-ref 0)))
+             ;; Register on-change handler
+             (twidget-watch count
+                            (lambda (new-value old-value)
+                              (message "Count changed from %s to %s"
+                                       old-value new-value)))
+             (list :count count)))
+  :template '(div
+              (span "Count: {count} ")
+              (span :on-click "count++" "[+]")))
+
+(tp-pop-to-buffer "*watched-counter*"
+  (twidget-insert '(watched-counter)))
+```
+
+The callback receives two arguments: the new value and the old value. Use the optional `immediate` argument to also trigger the callback immediately with the initial value:
+
+```elisp
+(twidget-watch ref callback t)  ; Call immediately with initial value
 ```
 
 ---
@@ -632,6 +662,8 @@ Macro that parses and inserts widget at point. Automatically captures lexical va
 | `twidget-set` | `(sym value &optional key)` | Set reactive value |
 | `twidget-inc` | `(sym num)` | Increment reactive value |
 | `twidget-dec` | `(sym num)` | Decrement reactive value |
+| `twidget-watch` | `(ref callback &optional immediate)` | Register on-change handler |
+| `twidget-unwatch` | `(ref callback)` | Remove on-change handler |
 
 ---
 

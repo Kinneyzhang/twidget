@@ -402,6 +402,8 @@ twidget 支持两种定义组件的方式：
 | `twidget-set` | 设置响应式值 | `(twidget-set 'count 10)` |
 | `twidget-inc` | 增加数值 | `(twidget-inc 'count 1)` |
 | `twidget-dec` | 减少数值 | `(twidget-dec 'count 1)` |
+| `twidget-watch` | 注册变更处理器 | `(twidget-watch ref callback)` |
+| `twidget-unwatch` | 移除变更处理器 | `(twidget-unwatch ref callback)` |
 
 #### 访问嵌套属性
 
@@ -413,6 +415,34 @@ twidget 支持两种定义组件的方式：
 ;; 设置嵌套属性
 (twidget-set 'user "李四" :name)  ; 设置 plist 中的 :name
 (twidget-set 'items "丁" 0)       ; 设置列表中的第一个元素
+```
+
+#### 监听变更 (on-change)
+
+使用 `twidget-watch` 注册当响应式值变更时触发的回调函数：
+
+```elisp
+(define-twidget watched-counter
+  :setup (lambda (_props _slot)
+           (let ((count (twidget-ref 0)))
+             ;; 注册变更处理器
+             (twidget-watch count
+                            (lambda (new-value old-value)
+                              (message "计数从 %s 变更为 %s"
+                                       old-value new-value)))
+             (list :count count)))
+  :template '(div
+              (span "计数: {count} ")
+              (span :on-click "count++" "[+]")))
+
+(tp-pop-to-buffer "*watched-counter*"
+  (twidget-insert '(watched-counter)))
+```
+
+回调函数接收两个参数：新值和旧值。使用可选的 `immediate` 参数可以在注册时立即以初始值触发回调：
+
+```elisp
+(twidget-watch ref callback t)  ; 立即以初始值调用
 ```
 
 ---
@@ -632,6 +662,8 @@ twidget 自带常用组件：
 | `twidget-set` | `(sym value &optional key)` | 设置响应式值 |
 | `twidget-inc` | `(sym num)` | 增加响应式值 |
 | `twidget-dec` | `(sym num)` | 减少响应式值 |
+| `twidget-watch` | `(ref callback &optional immediate)` | 注册变更处理器 |
+| `twidget-unwatch` | `(ref callback)` | 移除变更处理器 |
 
 ---
 
