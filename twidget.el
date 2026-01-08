@@ -1913,6 +1913,9 @@ This implements the \"on-change\" functionality for reactive values.
 When the ref's value changes (via `twidget-set' or `twidget-ref-set'),
 the CALLBACK will be invoked with the new and old values.
 
+Note: Watchers are called in reverse order of registration (LIFO).
+The most recently registered watcher is called first.
+
 Example usage in :setup:
 
   :setup (lambda (_props _slot)
@@ -1929,7 +1932,7 @@ Returns the REF for chaining."
     (error "twidget-watch: REF must be a twidget-ref object"))
   (unless (functionp callback)
     (error "twidget-watch: CALLBACK must be a function"))
-  ;; Add callback to the watchers list
+  ;; Add callback to the watchers list (prepend for LIFO order)
   (setf (twidget-ref-watchers ref)
         (cons callback (twidget-ref-watchers ref)))
   ;; Call immediately if requested
@@ -1942,12 +1945,14 @@ Returns the REF for chaining."
 (defun twidget-unwatch (ref callback)
   "Remove CALLBACK from the watchers list of REF.
 REF must be a twidget-ref object.
-CALLBACK is the function to remove.
+CALLBACK must be the exact same function object that was passed to
+`twidget-watch'.  Function comparison uses `eq', so you must keep
+a reference to the callback function if you plan to unwatch it later.
 Returns the REF."
   (unless (twidget-ref-p ref)
     (error "twidget-unwatch: REF must be a twidget-ref object"))
   (setf (twidget-ref-watchers ref)
-        (delete callback (twidget-ref-watchers ref)))
+        (delq callback (twidget-ref-watchers ref)))
   ref)
 
 ;;; Event System
