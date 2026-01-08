@@ -375,7 +375,7 @@
   :render (lambda (props _slot)
             (let* ((items (plist-get props :items))
                    (default-key (or (plist-get props :default-active-key)
-                                    (plist-get (car items) :key)))
+                                    (when items (plist-get (car items) :key))))
                    (tab-type (or (plist-get props :type) 'line))
                    (tab-size (or (plist-get props :size) 'middle))
                    ;; Build tab headers
@@ -435,7 +435,7 @@
 ;; Example usage:
 ;;   (twidget-pop-to-buffer "*reactive-tabs-demo*"
 ;;     (twidget-insert
-;;      '(reactive-tabs 
+;;      '(reactive-tabs
 ;;        :items ((:key "home" :label "Home" :children "Welcome to the Home tab!")
 ;;                (:key "profile" :label "Profile" :children "This is your Profile.")
 ;;                (:key "settings" :label "Settings" :children "Configure your Settings here."))
@@ -454,7 +454,7 @@
   :setup (lambda (props _slot)
            (let* ((items (plist-get props :items))
                   (default-key (or (plist-get props :default-active-key)
-                                   (plist-get (car items) :key)))
+                                   (when items (plist-get (car items) :key))))
                   (tab-type (or (plist-get props :type) 'line))
                   (tab-size (or (plist-get props :size) 'middle))
                   (on-change (plist-get props :on-change))
