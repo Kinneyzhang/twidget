@@ -298,10 +298,6 @@
              (list :bullet bullet
                    :content content
                    :change-status
-                   ;; Use closure-captured refs directly with twidget-ref-set
-                   ;; instead of global twidget-get/twidget-set to ensure
-                   ;; each checkbox instance operates on its own state.
-                   ;; Made interactive to avoid wrapper lambda overhead in keymap.
                    (lambda ()
                      (interactive)
                      (let ((curr-bullet (twidget-ref-value bullet))
@@ -310,12 +306,12 @@
                            (progn
                              (twidget-ref-set bullet done-bullet)
                              (twidget-ref-set
-                              content
-                              (tp-add curr-content 'tp-delete t)))
+                                 content
+                               (tp-add curr-content 'tp-delete t)))
                          (twidget-ref-set bullet todo-bullet)
                          (twidget-ref-set
-                          content
-                          (tp-remove curr-content 'tp-delete))))))))
+                             content
+                           (tp-remove curr-content 'tp-delete))))))))
   :template '(span :on-click "change-status"
                    "{bullet}" " " "{content}"))
 
@@ -325,10 +321,6 @@
            (done . "◉")
            (data . nil))
   :setup (lambda (props _slot)
-           ;; slot can be:
-           ;; - a list of items when multiple slot args are passed
-           ;; - a single item when one slot arg is passed
-           ;; Ensure items is always a list for :for iteration
            (list :todo (plist-get props :todo)
                  :done (plist-get props :done)
                  :items (plist-get props :data)))
@@ -336,166 +328,6 @@
                    :todo-bullet "{todo}"
                    :done-bullet "{done}"
                    :for "item in items" "{item}")))
-
-;; tabs - Interactive tabbed interface component with click-to-switch support
-;; Props:
-;;   :items - List of tab items, each is a plist with:
-;;            :key - Unique identifier for the tab
-;;            :label - Display text for the tab header
-;;            :children - Content to display when tab is active (string)
-;;            :disabled - Whether the tab is disabled (optional)
-;;   :default-active-key - Key of initially active tab (defaults to first item)
-;;   :type - Tab style: line (default) or card
-;;   :size - Tab size: small, middle (default), or large
-;;   :on-change - Callback function called with (new-key old-key) when tab changes
-;;   :on-tab-click - Callback function called with (key) when any tab is clicked
-;;
-;; Example usage:
-;;   (twidget-pop-to-buffer "*tabs-demo*"
-;;     (twidget-insert
-;;      '(tabs :items ((:key "1" :label "Tab 1" :children "Content for Tab 1")
-;;                     (:key "2" :label "Tab 2" :children "Content for Tab 2")
-;;                     (:key "3" :label "Tab 3" :children "Content for Tab 3" :disabled t))
-;;             :default-active-key "1"
-;;             :type line
-;;             :size middle
-;;             :on-change (lambda (new old) (message "Switched from %s to %s" old new)))))
-(define-twidget tabs
-  :type 'block
-  :props '((items . nil)
-           (default-active-key . nil)
-           (type . line)
-           (size . middle)
-           (on-change . nil)
-           (on-tab-click . nil))
-  :setup (lambda (props _slot)
-           (let* ((items (plist-get props :items))
-                  (default-key (or (plist-get props :default-active-key)
-                                   (when items (plist-get (car items) :key))))
-                  (tab-type (or (plist-get props :type) 'line))
-                  (tab-size (or (plist-get props :size) 'middle))
-                  (on-change (plist-get props :on-change))
-                  (on-tab-click (plist-get props :on-tab-click))
-                  ;; Reactive state for active key and content
-                  (active-key (twidget-ref default-key))
-                  (content (twidget-ref
-                            (or (plist-get
-                                 (cl-find-if
-                                  (lambda (item)
-                                    (equal (plist-get item :key) default-key))
-                                  items)
-                                 :children)
-                                "")))
-                  ;; Tab click handler - switches tabs and updates content
-                  (handle-tab-click
-                   (lambda (key)
-                     (let ((item (cl-find-if
-                                  (lambda (i) (equal (plist-get i :key) key))
-                                  items)))
-                       (when (and item (not (plist-get item :disabled)))
-                         ;; Call on-tab-click callback if provided
-                         (when on-tab-click
-                           (funcall on-tab-click key))
-                         ;; Switch tab if different from current
-                         (let ((old-key (twidget-ref-value active-key)))
-                           (unless (equal key old-key)
-                             ;; Call on-change callback if provided
-                             (when on-change
-                               (funcall on-change key old-key))
-                             ;; Update reactive state
-                             (twidget-ref-set active-key key)
-                             (twidget-ref-set content
-                                              (or (plist-get item :children) ""))))))))
-                  ;; Build reactive header string with click handlers
-                  (build-tab-header
-                   (lambda (item)
-                     (let* ((key (plist-get item :key))
-                            (label (plist-get item :label))
-                            (disabled (plist-get item :disabled))
-                            (is-active (equal key (twidget-ref-value active-key)))
-                            (padding (pcase tab-size
-                                       ('small 2)
-                                       ('large 6)
-                                       (_ 4)))
-                            (space (make-string padding ?\s))
-                            (tab-text (format "%s%s%s" space label space)))
-                       (cond
-                        ;; Disabled tab
-                        (disabled
-                         (tp-set tab-text 'face '(:foreground "gray")))
-                        ;; Active tab - styled but no click handler needed
-                        (is-active
-                         (if (eq tab-type 'card)
-                             (tp-set tab-text
-                                     'face 'bold
-                                     'tp-palette 'button-primary)
-                           (tp-set tab-text
-                                   'face '(:weight bold :underline t))))
-                        ;; Inactive tab - clickable
-                        (t
-                         (let ((map (make-sparse-keymap)))
-                           (define-key map [mouse-1]
-                             (lambda ()
-                               (interactive)
-                               (funcall handle-tab-click key)))
-                           (define-key map (kbd "RET")
-                             (lambda ()
-                               (interactive)
-                               (funcall handle-tab-click key)))
-                           (tp-set tab-text
-                                   'keymap map
-                                   'mouse-face 'highlight
-                                   'cursor 'hand)))))))
-                  ;; Helper to build all headers
-                  (build-all-headers
-                   (lambda ()
-                     (string-join (mapcar build-tab-header items) " ")))
-                  ;; Build complete headers string
-                  (headers (twidget-ref (funcall build-all-headers))))
-             ;; Watch active-key to update headers when tab changes
-             (twidget-watch active-key
-                            (lambda (_new _old)
-                              (twidget-ref-set headers (funcall build-all-headers))))
-             ;; Return bindings
-             (list :headers headers
-                   :content content)))
-  :template '(div "{headers}" (br) "{content}"))
-
-;; (define-twidget card
-;;   :type 'block
-;;   :slots '(header content footer)
-;;   :props '((width . 40)
-;;            (border . "─"))
-;;   :render (lambda (props slots)
-;;             (let* ((width (plist-get props :width))
-;;                    (border-char (plist-get props :border))
-;;                    (header (plist-get slots :header))
-;;                    (content (plist-get slots :content))
-;;                    (footer (plist-get slots :footer))
-;;                    (line (make-string width (string-to-char border-char))))
-;;               (concat
-;;                "╭" line "╮\n"
-;;                (when header
-;;                  (concat "│ " header
-;;                          (make-string
-;;                           (max 0 (- width (length header) 1)) ?\s)
-;;                          "│\n"
-;;                          "├" line "┤\n"))
-;;                (when content
-;;                  (concat "│ " content
-;;                          (make-string
-;;                           (max 0 (- width (length content) 1)) ?\s)
-;;                          "│\n"))
-;;                (when footer
-;;                  (concat "├" line "┤\n"
-;;                          "│ " footer
-;;                          (make-string
-;;                           (max 0 (- width (length footer) 1)) ?\s)
-;;                          "│\n"))
-;;                "╰" line "╯"))))
-
-;; (define-twidget progress)
-;; (define-twidget icon)
 
 (provide 'twidget-builtin)
 ;;; twidget-builtin.el ends here
