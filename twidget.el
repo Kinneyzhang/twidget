@@ -1068,7 +1068,7 @@ Returns the rendered string with text properties applied."
                           (let ((loop-bindings (cons (cons loop-var item)
                                                      local-bindings)))
                             ;; Reconstruct widget form without :for
-                            ;; Include both regular props and event props
+                            ;; Include regular props, event props, and tp-props
                             (let ((new-form (cons widget-name
                                                   (append
                                                    ;; Add remaining props (excluding :for)
@@ -1081,6 +1081,9 @@ Returns the rendered string with text properties applied."
                                                           (mapcar (lambda (p)
                                                                     (list (car p) (cdr p)))
                                                                   collected-event-props))
+                                                   ;; Add tp-props if present
+                                                   (when tp-props-value
+                                                     (list :tp-props tp-props-value))
                                                    ;; Add remaining args (slot values)
                                                    args))))
                               (push (twidget-parse new-form loop-bindings) results))))
@@ -1432,11 +1435,19 @@ Returns a plist with:
                       (when compiled-props
                         (setq event-props (append event-props compiled-props))))))
                 (setq check-args (cdr check-args)))))
-           ;; tp-props - extract for later
+           ;; tp-props - extract for later, but pass through if :for is present
            ((and (keywordp arg) (eq arg :tp-props))
             (setq check-args (cdr check-args))
             (when check-args
-              (setq tp-props-info (twidget--parse-tp-props-value (car check-args) reactive-bindings))
+              (let ((tp-props-val (car check-args)))
+                (if has-for
+                    ;; When :for is present, DON'T process tp-props here
+                    ;; Instead, keep them as args so they pass through :for iteration
+                    (progn
+                      (push arg non-event-args)
+                      (push tp-props-val non-event-args))
+                  ;; No :for - process tp-props now
+                  (setq tp-props-info (twidget--parse-tp-props-value tp-props-val reactive-bindings))))
               (setq check-args (cdr check-args))))
            ;; :for directive
            ((and (keywordp arg) (eq arg :for))
@@ -1470,8 +1481,9 @@ Returns a plist with:
           (setq non-event-args (cdr non-event-args))
           (when non-event-args
             (if (or (eq arg :for)
-                    ;; When :for is present, don't process event handler strings
-                    (and has-for (twidget--is-event-prop-p arg)))
+                    ;; When :for is present, don't process event handler strings or tp-props
+                    (and has-for (or (twidget--is-event-prop-p arg)
+                                     (eq arg :tp-props))))
                 (push (car non-event-args) result)
               ;; Pass event-props to template arg processing
               (push (twidget--process-template-arg (car non-event-args) bindings instance-id reactive-bindings event-props) result))
