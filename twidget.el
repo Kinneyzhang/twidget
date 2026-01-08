@@ -217,6 +217,7 @@ Returns text with tp.el properties for reactive updates."
                twidget-reactive-symbols))
     ;; Use tp-set with the tp-text property type and the reactive symbol reference
     ;; Include extra-props (like keymap, pointer) so they are preserved during updates
+    ;; extra-props must be a flat plist like (keymap map pointer hand rear-nonsticky (keymap))
     (if extra-props
         (apply #'tp-set text 'tp-text (intern (format "$%s" sym)) extra-props)
       (tp-set text 'tp-text (intern (format "$%s" sym))))))
