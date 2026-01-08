@@ -1841,6 +1841,7 @@ Returns a cons cell (LOOP-VAR . COLLECTION-NAME) or nil if invalid."
 REF must be a twidget-ref object.  This function finds the instance
 and variable name for REF and triggers proper reactive updates.
 Use this in :setup closures that have direct access to the ref object."
+  (declare (indent 1))
   (unless (twidget-ref-p ref)
     (error "twidget-ref-set: REF must be a twidget-ref object"))
   ;; Capture old value before updating
@@ -1928,6 +1929,7 @@ Example usage in :setup:
              (list :count count)))
 
 Returns the REF for chaining."
+  (declare (indent 1))
   (unless (twidget-ref-p ref)
     (error "twidget-watch: REF must be a twidget-ref object"))
   (unless (functionp callback)
@@ -1949,6 +1951,7 @@ CALLBACK must be the exact same function object that was passed to
 `twidget-watch'.  Function comparison uses `eq', so you must keep
 a reference to the callback function if you plan to unwatch it later.
 Returns the REF."
+  (declare (indent 1))
   (unless (twidget-ref-p ref)
     (error "twidget-unwatch: REF must be a twidget-ref object"))
   (setf (twidget-ref-watchers ref)
