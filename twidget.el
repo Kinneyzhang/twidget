@@ -112,13 +112,14 @@ Keys are (instance-id . var-name), values are lists of symbols to update.")
 (cl-defstruct (twidget-ref (:constructor twidget-ref--create))
   "A reactive reference that triggers updates when its value changes."
   value      ; The current value
-  watchers)  ; List of watcher functions
+  watchers   ; List of watcher functions
+  registry-key)  ; (instance-id . var-name) for fast lookup, set during registration
 
 (defun twidget-ref (initial-value)
   "Create a reactive reference with INITIAL-VALUE.
 Returns a twidget-ref object that can be used in templates.
 When the value changes, the UI will be updated automatically."
-  (twidget-ref--create :value initial-value :watchers nil))
+  (twidget-ref--create :value initial-value :watchers nil :registry-key nil))
 
 (defun twidget-ref-p (obj)
   "Return non-nil if OBJ is a twidget-ref."
@@ -130,7 +131,10 @@ When the value changes, the UI will be updated automatically."
 
 (defun twidget--register-ref (instance-id var-name ref)
   "Register a reactive REF for INSTANCE-ID with VAR-NAME."
-  (puthash (cons instance-id var-name) ref twidget-ref-registry))
+  (let ((key (cons instance-id var-name)))
+    (puthash key ref twidget-ref-registry)
+    ;; Store the key in the ref for fast lookup during updates
+    (setf (twidget-ref-registry-key ref) key)))
 
 (defvar-local twidget-reactive-text-counter 0
   "Counter for generating unique reactive text IDs.")
@@ -1448,11 +1452,16 @@ EVENT-PROPS is an optional plist of event properties to include in reactive text
    ;; String - substitute placeholders
    ((stringp arg)
     (twidget--expand-template-string arg bindings instance-id event-props))
-   ;; Widget form - expand it
+   ;; Widget form - expand it and mark block elements
    ((and (listp arg)
          (symbolp (car arg))
          (assoc (car arg) twidget-alist))
-    (twidget--expand-template arg bindings instance-id reactive-bindings))
+    (let ((rendered (twidget--expand-template arg bindings instance-id reactive-bindings))
+          (is-block (twidget-is-block-widget-p arg)))
+      ;; Mark block elements with property so twidget-slot-to-string can detect them
+      (if (and is-block (stringp rendered))
+          (propertize rendered 'twidget-block-element t)
+        rendered)))
    ;; Lambda/function - return as is
    ((functionp arg) arg)
    ;; List that might be a lambda form
@@ -1651,30 +1660,30 @@ Examples:
   (twidget-get \\='user :name)     ; Get :name from plist
   (twidget-get \\='items 0)        ; Get first element from list"
   (let ((key (if (symbolp var-name) (symbol-name var-name) var-name)))
-    ;; Search through all instances to find the ref
+    ;; Search through the ref registry for refs with matching var-name
+    ;; This is more efficient than searching through all instances
     (catch 'found
-      (maphash (lambda (_inst-key data)
-                 (let ((bindings (plist-get data :bindings)))
-                   (when bindings
-                     (let ((ref (plist-get bindings (intern (format ":%s" key)))))
-                       (when (twidget-ref-p ref)
-                         (let ((value (twidget-ref-value ref)))
-                           (throw 'found
-                                  (cond
-                                   ;; No key/index - return whole value
-                                   ((null key-or-index) value)
-                                   ;; Keyword access for plist
-                                   ((keywordp key-or-index)
-                                    (if (plistp value)
-                                        (plist-get value key-or-index)
-                                      (error "Cannot use keyword access on non-plist value")))
-                                   ;; Integer access for list
-                                   ((integerp key-or-index)
-                                    (if (listp value)
-                                        (nth key-or-index value)
-                                      (error "Cannot use index access on non-list value")))
-                                   (t (error "KEY-OR-INDEX must be a keyword or integer"))))))))))
-               twidget-instances)
+      (maphash (lambda (registry-key ref)
+                 (when (and (consp registry-key)
+                            (string= (cdr registry-key) key)
+                            (twidget-ref-p ref))
+                   (let ((value (twidget-ref-value ref)))
+                     (throw 'found
+                            (cond
+                             ;; No key/index - return whole value
+                             ((null key-or-index) value)
+                             ;; Keyword access for plist
+                             ((keywordp key-or-index)
+                              (if (plistp value)
+                                  (plist-get value key-or-index)
+                                (error "Cannot use keyword access on non-plist value")))
+                             ;; Integer access for list
+                             ((integerp key-or-index)
+                              (if (listp value)
+                                  (nth key-or-index value)
+                                (error "Cannot use index access on non-list value")))
+                             (t (error "KEY-OR-INDEX must be a keyword or integer")))))))
+               twidget-ref-registry)
       nil)))
 
 (defun twidget-set (var-name value &optional key-or-index)
@@ -1690,47 +1699,48 @@ Examples:
   (twidget-set \\='user \"John\" :name)      ; Set :name in plist
   (twidget-set \\='items \"new-item\" 0)     ; Set first element in list"
   (let ((key (if (symbolp var-name) (symbol-name var-name) var-name)))
-    ;; Search through all instances to find and update the ref
-    (maphash (lambda (inst-key data)
-               (let ((bindings (plist-get data :bindings)))
-                 (when bindings
-                   (let ((ref (plist-get bindings (intern (format ":%s" key)))))
-                     (when (twidget-ref-p ref)
-                       ;; Capture old value before computing new value
-                       (let* ((old-value (twidget-ref-value ref))
-                              (new-value
+    ;; Search through the ref registry for refs with matching var-name
+    ;; This is more efficient than searching through all instances
+    (maphash (lambda (registry-key ref)
+               (when (and (consp registry-key)
+                          (string= (cdr registry-key) key)
+                          (twidget-ref-p ref))
+                 (let ((inst-key (car registry-key)))
+                   ;; Capture old value before computing new value
+                   (let* ((old-value (twidget-ref-value ref))
+                          (new-value
+                           (cond
+                            ;; No key/index - set whole value
+                            ((null key-or-index) value)
+                            ;; Keyword access for plist
+                            ((keywordp key-or-index)
+                             (let ((current (twidget-ref-value ref)))
+                               (if (or (null current) (plistp current))
+                                   (plist-put (copy-sequence current) key-or-index value)
+                                 (error "Cannot use keyword access on non-plist value"))))
+                            ;; Integer access for list
+                            ((integerp key-or-index)
+                             (let ((current (twidget-ref-value ref)))
                                (cond
-                                ;; No key/index - set whole value
-                                ((null key-or-index) value)
-                                ;; Keyword access for plist
-                                ((keywordp key-or-index)
-                                 (let ((current (twidget-ref-value ref)))
-                                   (if (or (null current) (plistp current))
-                                       (plist-put (copy-sequence current) key-or-index value)
-                                     (error "Cannot use keyword access on non-plist value"))))
-                                ;; Integer access for list
-                                ((integerp key-or-index)
-                                 (let ((current (twidget-ref-value ref)))
-                                   (cond
-                                    ((not (listp current))
-                                     (error "Cannot use index access on non-list value"))
-                                    (t
-                                     (let ((len (length current)))
-                                       (if (or (< key-or-index 0) (>= key-or-index len))
-                                           (error "Index %d out of bounds for list of length %d"
-                                                  key-or-index len)
-                                         (let ((new-list (copy-sequence current)))
-                                           (setf (nth key-or-index new-list) value)
-                                           new-list)))))))
-                                (t (error "KEY-OR-INDEX must be a keyword or integer")))))
-                         ;; Update the ref value
-                         (setf (twidget-ref-value ref) new-value)
-                         ;; Notify watchers with both new and old values
-                         (dolist (watcher (twidget-ref-watchers ref))
-                           (funcall watcher new-value old-value))
-                         ;; Trigger buffer update with accessor info for incremental updates
-                         (twidget--trigger-update inst-key key new-value key-or-index value)))))))
-             twidget-instances)))
+                                ((not (listp current))
+                                 (error "Cannot use index access on non-list value"))
+                                (t
+                                 (let ((len (length current)))
+                                   (if (or (< key-or-index 0) (>= key-or-index len))
+                                       (error "Index %d out of bounds for list of length %d"
+                                              key-or-index len)
+                                     (let ((new-list (copy-sequence current)))
+                                       (setf (nth key-or-index new-list) value)
+                                       new-list)))))))
+                            (t (error "KEY-OR-INDEX must be a keyword or integer")))))
+                     ;; Update the ref value
+                     (setf (twidget-ref-value ref) new-value)
+                     ;; Notify watchers with both new and old values
+                     (dolist (watcher (twidget-ref-watchers ref))
+                       (funcall watcher new-value old-value))
+                     ;; Trigger buffer update with accessor info for incremental updates
+                     (twidget--trigger-update inst-key key new-value key-or-index value)))))
+             twidget-ref-registry)))
 
 (defun twidget--trigger-update (instance-id var-name value &optional accessor sub-value)
   "Trigger a reactive update for INSTANCE-ID when VAR-NAME changes to VALUE.
@@ -1850,15 +1860,12 @@ Use this in :setup closures that have direct access to the ref object."
     ;; Notify watchers with both new and old values
     (dolist (watcher (twidget-ref-watchers ref))
       (funcall watcher value old-value))
-    ;; Find the instance-id and var-name for this ref by searching the registry
-    (catch 'done
-      (maphash (lambda (key stored-ref)
-                 (when (eq stored-ref ref)
-                   (let ((instance-id (car key))
-                         (var-name (cdr key)))
-                     (twidget--trigger-update instance-id var-name value)
-                     (throw 'done t))))
-               twidget-ref-registry))))
+    ;; Use cached registry key for O(1) lookup instead of maphash
+    (let ((registry-key (twidget-ref-registry-key ref)))
+      (when registry-key
+        (let ((instance-id (car registry-key))
+              (var-name (cdr registry-key)))
+          (twidget--trigger-update instance-id var-name value))))))
 
 (defun twidget-inc (sym num)
   "Increment the numeric value stored in reactive variable SYM by NUM.
@@ -1889,15 +1896,14 @@ SYM is a symbol. The value can be a string or number."
 If INITIAL-VALUE is provided, create a new reactive variable.
 Returns the twidget-ref object."
   (let ((key (if (symbolp var-name) (symbol-name var-name) var-name)))
-    ;; Look for existing ref or create new one
+    ;; Look for existing ref in the registry (more efficient than searching instances)
     (catch 'found
-      (maphash (lambda (inst-key data)
-                 (let ((bindings (plist-get data :bindings)))
-                   (when bindings
-                     (let ((ref (plist-get bindings (intern (format ":%s" key)))))
-                       (when (twidget-ref-p ref)
-                         (throw 'found ref))))))
-               twidget-instances)
+      (maphash (lambda (registry-key ref)
+                 (when (and (consp registry-key)
+                            (string= (cdr registry-key) key)
+                            (twidget-ref-p ref))
+                   (throw 'found ref)))
+               twidget-ref-registry)
       ;; Not found, create a new one if initial value provided
       (when initial-value
         (twidget-ref initial-value)))))
