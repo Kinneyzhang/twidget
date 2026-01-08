@@ -1029,6 +1029,7 @@ Returns the rendered string with text properties applied."
       ;; Extract keyword arguments and collect slot values
       (let ((args rest)
             (collected-props nil)
+            (collected-event-props nil)  ; Store event properties like :on-click
             (collected-named-slots nil)
             (slot-parts nil)
             (for-expr nil)
@@ -1045,6 +1046,9 @@ Returns the rendered string with text properties applied."
              ;; Handle :tp-props specially
              ((eq key :tp-props)
               (setq tp-props-value val))
+             ;; Handle event properties (:on-click, etc.)
+             ((twidget--is-event-prop-p key)
+              (push (cons key val) collected-event-props))
              ;; Regular prop
              (t (push (cons key val) collected-props)))
             (setq args (cddr args))))
@@ -1064,6 +1068,7 @@ Returns the rendered string with text properties applied."
                           (let ((loop-bindings (cons (cons loop-var item)
                                                      local-bindings)))
                             ;; Reconstruct widget form without :for
+                            ;; Include both regular props and event props
                             (let ((new-form (cons widget-name
                                                   (append
                                                    ;; Add remaining props (excluding :for)
@@ -1071,6 +1076,11 @@ Returns the rendered string with text properties applied."
                                                           (mapcar (lambda (p)
                                                                     (list (car p) (cdr p)))
                                                                   collected-props))
+                                                   ;; Add event props (like :on-click)
+                                                   (apply #'append
+                                                          (mapcar (lambda (p)
+                                                                    (list (car p) (cdr p)))
+                                                                  collected-event-props))
                                                    ;; Add remaining args (slot values)
                                                    args))))
                               (push (twidget-parse new-form loop-bindings) results))))
@@ -1143,6 +1153,21 @@ Ignoring arguments: %S" widget-name args)))
                       (funcall render-fn parsed-props slot-value parent-render-fn)
                     ;; Normal render call
                     (funcall render-fn parsed-props slot-value))))
+          ;; Apply event properties if any (e.g., :on-click)
+          ;; This is important for simple widgets used with :for loops
+          (when collected-event-props
+            (dolist (event-prop collected-event-props)
+              (let* ((event-key (car event-prop))
+                     (handler-expr (cdr event-prop))
+                     (event-type (twidget--is-event-prop-p event-key)))
+                (when event-type
+                  ;; Compile the event handler with local-bindings (includes loop vars)
+                  ;; Pass local-bindings as runtime-bindings for variable resolution
+                  (let ((compiled-props (twidget--process-event-prop 
+                                         event-type handler-expr nil local-bindings)))
+                    (when compiled-props
+                      (setq rendered-result 
+                            (twidget--apply-event-properties rendered-result compiled-props))))))))
           ;; Apply :tp-props if specified
           (when tp-props-value
             (setq rendered-result (twidget--apply-static-tp-props rendered-result tp-props-value)))
@@ -1365,16 +1390,23 @@ INSTANCE-ID is used for reactive tracking.
 REACTIVE-BINDINGS is the original plist from :setup, used for event handlers.
 
 Returns a plist with:
-  :args - the processed arguments (without event props and tp-props)
+  :args - the processed arguments (without event props and tp-props, unless :for is present)
   :event-props - text properties for events (or nil)
   :tp-props-info - tp-props info plist with :value-fn and :static-value (or nil)"
   (let ((result nil)
         (event-props nil)
         (tp-props-info nil)
         (has-for nil)
+        (event-arg-pairs nil)  ; Store event arg pairs for :for case
         (non-event-args nil))
-    ;; First pass: check if :for directive is present and extract event-props
-    ;; We need to extract event-props first so we can pass them to template arg processing
+    ;; First pass: check if :for directive is present
+    (let ((check-args args))
+      (while check-args
+        (let ((arg (car check-args)))
+          (when (and (keywordp arg) (eq arg :for))
+            (setq has-for t))
+          (setq check-args (cdr check-args)))))
+    ;; Second pass: process args based on whether :for is present
     (let ((check-args args))
       (while check-args
         (let ((arg (car check-args)))
@@ -1384,12 +1416,21 @@ Returns a plist with:
             (let ((event-type (twidget--is-event-prop-p arg)))
               (setq check-args (cdr check-args))
               (when check-args
-                (let* ((handler-expr (car check-args))
-                       (compiled-props
-                        (twidget--process-event-prop 
-                         event-type handler-expr reactive-bindings)))
-                  (when compiled-props
-                    (setq event-props (append event-props compiled-props))))
+                (let ((handler-expr (car check-args)))
+                  (if has-for
+                      ;; When :for is present, DON'T compile event handlers here
+                      ;; Instead, keep them as args so they pass through :for iteration
+                      ;; The event handler will be compiled in the recursive call
+                      ;; with the loop variable available in bindings
+                      (progn
+                        (push arg non-event-args)
+                        (push handler-expr non-event-args))
+                    ;; No :for - compile event handlers now
+                    (let ((compiled-props
+                           (twidget--process-event-prop 
+                            event-type handler-expr reactive-bindings bindings)))
+                      (when compiled-props
+                        (setq event-props (append event-props compiled-props))))))
                 (setq check-args (cdr check-args)))))
            ;; tp-props - extract for later
            ((and (keywordp arg) (eq arg :tp-props))
@@ -1399,8 +1440,7 @@ Returns a plist with:
               (setq check-args (cdr check-args))))
            ;; :for directive
            ((and (keywordp arg) (eq arg :for))
-            (setq has-for t)
-            ;; Collect this arg pair for second pass
+            ;; Collect this arg pair
             (push arg non-event-args)
             (setq check-args (cdr check-args))
             (when check-args
@@ -1419,7 +1459,7 @@ Returns a plist with:
             (setq check-args (cdr check-args)))))))
     ;; Reverse non-event-args to restore original order
     (setq non-event-args (nreverse non-event-args))
-    ;; Second pass: process non-event arguments with event-props available
+    ;; Third pass: process non-event arguments with event-props available
     ;; Event-props will be passed to reactive text so they are preserved during updates
     (while non-event-args
       (let ((arg (car non-event-args)))
@@ -1429,7 +1469,9 @@ Returns a plist with:
           (push arg result)
           (setq non-event-args (cdr non-event-args))
           (when non-event-args
-            (if (eq arg :for)
+            (if (or (eq arg :for)
+                    ;; When :for is present, don't process event handler strings
+                    (and has-for (twidget--is-event-prop-p arg)))
                 (push (car non-event-args) result)
               ;; Pass event-props to template arg processing
               (push (twidget--process-template-arg (car non-event-args) bindings instance-id reactive-bindings event-props) result))
@@ -2272,9 +2314,11 @@ Similar to `twidget--parse-ternary-expression` but for value expressions."
                 :true-value (twidget--parse-value-expr true-val)
                 :false-value (twidget--parse-value-expr false-val)))))))
 
-(defun twidget--compile-event-handler (parsed-expr bindings-plist)
+(defun twidget--compile-event-handler (parsed-expr bindings-plist &optional runtime-bindings)
   "Compile PARSED-EXPR into an executable lambda.
 BINDINGS-PLIST is the reactive bindings from :setup, containing methods and refs.
+RUNTIME-BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for
+loop variables from :for directives.
 Returns a lambda function that can be used as an event handler."
   (let ((stmt-type (plist-get parsed-expr :type)))
     (pcase stmt-type
@@ -2310,19 +2354,32 @@ Returns a lambda function that can be used as an event handler."
        (let* ((method-name (plist-get parsed-expr :name))
               (args-parsed (plist-get parsed-expr :args))
               (method-key (intern (format ":%s" method-name)))
-              (method-fn (plist-get bindings-plist method-key)))
-         (if method-fn
-             (lambda ()
-               (interactive)
-               (let ((args (twidget--resolve-arguments args-parsed bindings-plist)))
-                 (apply method-fn args)))
-           ;; Try global function
+              ;; First try bindings-plist (reactive bindings from :setup)
+              (method-fn (plist-get bindings-plist method-key))
+              ;; Also check runtime-bindings (alist) for methods from :for loops
+              (runtime-method-fn (when (and (not method-fn) runtime-bindings)
+                                   (cdr (assoc method-name runtime-bindings)))))
+         (cond
+          ;; Method found in bindings-plist
+          (method-fn
+           (lambda ()
+             (interactive)
+             (let ((args (twidget--resolve-arguments args-parsed bindings-plist runtime-bindings)))
+               (apply method-fn args))))
+          ;; Method found in runtime-bindings (alist)
+          ((functionp runtime-method-fn)
+           (lambda ()
+             (interactive)
+             (let ((args (twidget--resolve-arguments args-parsed bindings-plist runtime-bindings)))
+               (apply runtime-method-fn args))))
+          ;; Try global function
+          (t
            (let ((global-fn (intern method-name)))
              (lambda ()
                (interactive)
                (when (fboundp global-fn)
-                 (let ((args (twidget--resolve-arguments args-parsed bindings-plist)))
-                   (apply global-fn args))))))))
+                 (let ((args (twidget--resolve-arguments args-parsed bindings-plist runtime-bindings)))
+                   (apply global-fn args)))))))))
 
       ;; Increment operation
       ('increment
@@ -2382,12 +2439,12 @@ Returns a lambda function that can be used as an event handler."
              ;; Direct ref access - fast path
              (lambda ()
                (interactive)
-               (let ((resolved-value (twidget--resolve-value value-parsed bindings-plist)))
+               (let ((resolved-value (twidget--resolve-value value-parsed bindings-plist runtime-bindings)))
                  (twidget-ref-set ref-or-val resolved-value)))
            ;; Fallback to global lookup - slow path (for variables not in bindings)
            (lambda ()
              (interactive)
-             (let ((resolved-value (twidget--resolve-value value-parsed bindings-plist)))
+             (let ((resolved-value (twidget--resolve-value value-parsed bindings-plist runtime-bindings)))
                (twidget-set (intern var-name) resolved-value))))))
 
       ;; Multi-statement - pre-compile all handlers at definition time
@@ -2395,7 +2452,7 @@ Returns a lambda function that can be used as an event handler."
        (let* ((statements (plist-get parsed-expr :statements))
               ;; Pre-compile all statement handlers
               (compiled-handlers (mapcar (lambda (stmt)
-                                           (twidget--compile-event-handler stmt bindings-plist))
+                                           (twidget--compile-event-handler stmt bindings-plist runtime-bindings))
                                          statements)))
          (lambda ()
            (interactive)
@@ -2408,8 +2465,8 @@ Returns a lambda function that can be used as an event handler."
               (true-expr (plist-get parsed-expr :true-expr))
               (false-expr (plist-get parsed-expr :false-expr))
               ;; Pre-compile both branch handlers
-              (true-handler (twidget--compile-event-handler true-expr bindings-plist))
-              (false-handler (twidget--compile-event-handler false-expr bindings-plist)))
+              (true-handler (twidget--compile-event-handler true-expr bindings-plist runtime-bindings))
+              (false-handler (twidget--compile-event-handler false-expr bindings-plist runtime-bindings)))
          (lambda ()
            (interactive)
            (if (twidget--eval-condition condition-str bindings-plist)
@@ -2421,7 +2478,7 @@ Returns a lambda function that can be used as an event handler."
        (let* ((condition-str (plist-get parsed-expr :condition))
               (action-expr (plist-get parsed-expr :action))
               ;; Pre-compile action handler
-              (action-handler (twidget--compile-event-handler action-expr bindings-plist)))
+              (action-handler (twidget--compile-event-handler action-expr bindings-plist runtime-bindings)))
          (lambda ()
            (interactive)
            (when (twidget--eval-condition condition-str bindings-plist)
@@ -2432,7 +2489,7 @@ Returns a lambda function that can be used as an event handler."
        (let* ((condition-str (plist-get parsed-expr :condition))
               (action-expr (plist-get parsed-expr :action))
               ;; Pre-compile action handler
-              (action-handler (twidget--compile-event-handler action-expr bindings-plist)))
+              (action-handler (twidget--compile-event-handler action-expr bindings-plist runtime-bindings)))
          (lambda ()
            (interactive)
            (unless (twidget--eval-condition condition-str bindings-plist)
@@ -2448,14 +2505,18 @@ Returns a lambda function that can be used as an event handler."
       ;; Default - no-op
       (_ (lambda () (interactive))))))
 
-(defun twidget--resolve-arguments (args-parsed bindings-plist)
-  "Resolve ARGS-PARSED list to actual values using BINDINGS-PLIST."
+(defun twidget--resolve-arguments (args-parsed bindings-plist &optional runtime-bindings)
+  "Resolve ARGS-PARSED list to actual values using BINDINGS-PLIST.
+RUNTIME-BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for
+loop variables from :for directives."
   (mapcar (lambda (arg)
-            (twidget--resolve-value arg bindings-plist))
+            (twidget--resolve-value arg bindings-plist runtime-bindings))
           args-parsed))
 
-(defun twidget--resolve-value (value-parsed bindings-plist)
-  "Resolve VALUE-PARSED to an actual value using BINDINGS-PLIST."
+(defun twidget--resolve-value (value-parsed bindings-plist &optional runtime-bindings)
+  "Resolve VALUE-PARSED to an actual value using BINDINGS-PLIST.
+RUNTIME-BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for
+loop variables from :for directives."
   (let ((value-type (plist-get value-parsed :type)))
     (pcase value-type
       ('string (plist-get value-parsed :value))
@@ -2464,23 +2525,31 @@ Returns a lambda function that can be used as an event handler."
       ('event-ref nil) ; $event would need special handling
       ('negation
        (let ((operand (plist-get value-parsed :operand)))
-         (not (twidget--resolve-value operand bindings-plist))))
+         (not (twidget--resolve-value operand bindings-plist runtime-bindings))))
       ('variable
        (let* ((var-name (plist-get value-parsed :name))
               (var-key (intern (format ":%s" var-name)))
-              (ref-or-val (plist-get bindings-plist var-key)))
-         (if (twidget-ref-p ref-or-val)
-             (twidget-ref-value ref-or-val)
-           (or ref-or-val
-               ;; Try getting from reactive system
-               (twidget-get (intern var-name))))))
+              (ref-or-val (plist-get bindings-plist var-key))
+              ;; Check runtime-bindings (alist) for loop variables from :for
+              (runtime-val (when runtime-bindings
+                             (cdr (assoc var-name runtime-bindings)))))
+         (cond
+          ;; First check runtime-bindings for loop variables (highest priority)
+          (runtime-val runtime-val)
+          ;; Then check reactive refs
+          ((twidget-ref-p ref-or-val)
+           (twidget-ref-value ref-or-val))
+          ;; Then check static bindings from setup
+          (ref-or-val ref-or-val)
+          ;; Finally try getting from reactive system
+          (t (twidget-get (intern var-name))))))
       ('ternary
        (let ((condition-str (plist-get value-parsed :condition))
              (true-val (plist-get value-parsed :true-value))
              (false-val (plist-get value-parsed :false-value)))
          (if (twidget--eval-condition condition-str bindings-plist)
-             (twidget--resolve-value true-val bindings-plist)
-           (twidget--resolve-value false-val bindings-plist))))
+             (twidget--resolve-value true-val bindings-plist runtime-bindings)
+           (twidget--resolve-value false-val bindings-plist runtime-bindings))))
       ('expression
        (twidget--eval-raw-expression (plist-get value-parsed :expr) bindings-plist))
       (_ nil))))
@@ -2704,12 +2773,14 @@ Returns a keymap suitable for use as a text property."
     (define-key map (kbd "<return>") handler-fn)
     map))
 
-(defun twidget--process-event-prop (event-type handler-string bindings-plist)
+(defun twidget--process-event-prop (event-type handler-string bindings-plist &optional runtime-bindings)
   "Process an event property of type EVENT-TYPE with HANDLER-STRING.
 Uses BINDINGS-PLIST for variable and method resolution.
+RUNTIME-BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for
+loop variables from :for directives.
 Returns a plist of text properties to apply."
   (let* ((parsed (twidget--parse-event-expression handler-string))
-         (handler-fn (twidget--compile-event-handler parsed bindings-plist)))
+         (handler-fn (twidget--compile-event-handler parsed bindings-plist runtime-bindings)))
     (pcase event-type
       ('click
        (list 'keymap (twidget--create-click-handler handler-fn)
