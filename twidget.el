@@ -2626,5 +2626,8 @@ Returns the TEXT with properties applied."
 
 (require 'twidget-builtin)
 
+(defalias 'twidget-pop-to-buffer 'tp-pop-to-buffer)
+(defalias 'twidget-switch-to-buffer 'tp-switch-to-buffer)
+
 (provide 'twidget)
 ;;; twidget.el ends here
