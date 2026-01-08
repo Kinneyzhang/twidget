@@ -268,9 +268,7 @@
                    (slot-str (twidget-slot-to-string slot))
                    (btn-text (format "%s%s%s" space slot-str space)))
               (tp-set btn-text
-                      'tp-button btn-type
-                      'mouse-face 'highlight
-                      'cursor 'hand))))
+                      'tp-button btn-type 'pointer 'hand))))
 
 ;; badge - Small status badge/tag with colored background.
 (define-twidget badge
