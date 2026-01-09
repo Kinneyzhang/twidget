@@ -1001,7 +1001,7 @@ Returns the slot name as a symbol (e.g., \\='header)."
 ;;; Widget Parsing
 ;; ============================================================================
 
-(cl-defun twidget-parse (widget-form &optional bindings)
+(cl-defun twidget-parse (widget-form &optional bindings instance-id)
   "Parse and render a widget invocation.
 
 WIDGET-FORM is a list starting with the widget name, followed by
@@ -1030,6 +1030,9 @@ Use `twidget-slot-to-string' to convert a list slot to a string when needed.
 
 BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for placeholder
 substitution in slot content.
+
+INSTANCE-ID is an optional widget instance identifier for reactive tracking.
+When provided, `:tp-props` with dynamic functions will be reactive.
 
 Example:
   (twidget-parse
@@ -1115,7 +1118,7 @@ Returns the rendered string with text properties applied."
                                                      (list :tp-props tp-props-value))
                                                    ;; Add remaining args (slot values)
                                                    args))))
-                              (push (twidget-parse new-form loop-bindings) results))))
+                              (push (twidget-parse new-form loop-bindings instance-id) results))))
                         ;; Return a list of results, not concatenated string
                         ;; This allows parent components (like col) to join them as needed
                         (cl-return-from twidget-parse (nreverse results)))
@@ -1210,7 +1213,13 @@ Ignoring arguments: %S" widget-name args)))
                        (value-fn (plist-get tp-props-info :value-fn))
                        (static-value (plist-get tp-props-info :static-value)))
                   (cond
-                   ;; Dynamic tp-props - call the function to get the props
+                   ;; Dynamic tp-props with instance-id - use reactive props for auto-updates
+                   ((and value-fn instance-id)
+                    (condition-case err
+                        (setq rendered-result (twidget--apply-reactive-tp-props rendered-result value-fn instance-id))
+                      (error
+                       (warn "twidget: Error evaluating :tp-props '%s': %s" tp-props-value (error-message-string err)))))
+                   ;; Dynamic tp-props without instance-id - apply statically
                    (value-fn
                     (condition-case err
                         (let ((props-plist (funcall value-fn)))
@@ -1379,7 +1388,7 @@ REACTIVE-BINDINGS is the original plist from :setup, used for event handlers."
            (processed-args (plist-get processed-result :args))
            (event-props (plist-get processed-result :event-props))
            (tp-props-info (plist-get processed-result :tp-props-info))
-           (rendered-text (twidget-parse (cons widget-name processed-args) bindings))
+           (rendered-text (twidget-parse (cons widget-name processed-args) bindings instance-id))
            (result-text rendered-text))
       ;; Apply event properties to the rendered text
       (when event-props
