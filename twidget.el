@@ -1212,9 +1212,12 @@ Ignoring arguments: %S" widget-name args)))
                   (cond
                    ;; Dynamic tp-props - call the function to get the props
                    (value-fn
-                    (let ((props-plist (funcall value-fn)))
-                      (when props-plist
-                        (setq rendered-result (twidget--apply-static-tp-props rendered-result props-plist)))))
+                    (condition-case err
+                        (let ((props-plist (funcall value-fn)))
+                          (when props-plist
+                            (setq rendered-result (twidget--apply-static-tp-props rendered-result props-plist))))
+                      (error
+                       (warn "twidget: Error evaluating :tp-props '%s': %s" tp-props-value (error-message-string err)))))
                    ;; Static value - apply directly
                    (static-value
                     (setq rendered-result (twidget--apply-static-tp-props rendered-result static-value)))))
