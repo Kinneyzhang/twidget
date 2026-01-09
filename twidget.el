@@ -282,15 +282,19 @@ Called when any reactive variable changes to recompute property values."
                  (new-value (plist-get props prop-name)))
             (set sym new-value)))))))
 
-(defun twidget--parse-tp-props-value (tp-props-expr reactive-bindings)
+(defun twidget--parse-tp-props-value (tp-props-expr reactive-bindings &optional runtime-bindings)
   "Parse TP-PROPS-EXPR and return a plist with tp-props info.
 TP-PROPS-EXPR is a plist of tp.el text properties, e.g.:
   (tp-button (:palette info))
   (face (:background \"red\"))
 Or a string referencing a method that returns such a plist:
   \"getProps()\"
+  \"changeProps(tab)\"  ; with arguments from loop variables
 
 REACTIVE-BINDINGS is the plist from :setup.
+RUNTIME-BINDINGS is an optional alist of (VAR-NAME . VALUE) pairs for
+loop variables from :for directives.  Methods can also be found in
+runtime-bindings when called from :for loops.
 
 Returns a plist with:
   :value-fn - a function to get the props (for reactive props)
@@ -300,31 +304,56 @@ Returns a plist with:
    ((stringp tp-props-expr)
     (let ((trimmed (string-trim tp-props-expr)))
       (cond
-       ;; Method call: "getProps()"
+       ;; Method call: "getProps()" or "changeProps(tab)"
        ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)\\s-*(\\(.*\\))$" trimmed)
         (let* ((method-name (match-string 1 trimmed))
+               (args-str (match-string 2 trimmed))
                (method-key (intern (format ":%s" method-name)))
-               (method-fn (plist-get reactive-bindings method-key)))
-          (if (functionp method-fn)
-              (list :value-fn method-fn :static-value nil)
+               ;; First try reactive-bindings (plist from :setup)
+               (method-fn (plist-get reactive-bindings method-key))
+               ;; Also check runtime-bindings (alist) for methods from :for loops
+               (runtime-method-fn (when (and (not method-fn) runtime-bindings)
+                                    (cdr (assoc method-name runtime-bindings))))
+               ;; Use whichever method was found
+               (final-method-fn (or method-fn runtime-method-fn)))
+          (if (functionp final-method-fn)
+              (if (string-empty-p (string-trim args-str))
+                  ;; No arguments - just use the method directly
+                  (list :value-fn final-method-fn :static-value nil)
+                ;; Has arguments - parse and resolve them
+                (let* ((args-parsed (twidget--parse-arguments args-str))
+                       ;; Resolve arguments now (at parse time) using runtime-bindings
+                       (resolved-args (twidget--resolve-arguments args-parsed reactive-bindings runtime-bindings)))
+                  ;; Return a value-fn that calls the method with resolved args
+                  (list :value-fn (lambda () (apply final-method-fn resolved-args))
+                        :static-value nil)))
             ;; Not a method, treat as literal string
             (list :value-fn nil :static-value tp-props-expr))))
        ;; Variable reference: "propsVar" (only if it exists in bindings)
        ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_-]*\\)$" trimmed)
         (let* ((var-name trimmed)
                (var-key (intern (format ":%s" var-name)))
-               (ref-or-val (plist-get reactive-bindings var-key)))
+               (ref-or-val (plist-get reactive-bindings var-key))
+               ;; Also check runtime-bindings (alist)
+               (runtime-val (when (and (not ref-or-val) runtime-bindings)
+                              (cdr (assoc var-name runtime-bindings)))))
           (cond
            ;; It's a reactive ref - create a value-fn that reads it
            ((twidget-ref-p ref-or-val)
             (list :value-fn (lambda () (twidget-get (intern var-name)))
                   :static-value nil))
-           ;; It's a function - use it as value-fn
+           ;; It's a function from reactive-bindings - use it as value-fn
            ((functionp ref-or-val)
             (list :value-fn ref-or-val :static-value nil))
-           ;; It's a static value from bindings
+           ;; It's a static value from reactive-bindings
            (ref-or-val
             (list :value-fn nil :static-value ref-or-val))
+           ;; Check runtime-bindings for function
+           ((functionp runtime-val)
+            (list :value-fn runtime-val :static-value nil))
+           ;; Static value from runtime-bindings
+           (runtime-val
+            (list :value-fn nil :static-value runtime-val))
            ;; Not found in bindings - treat as literal string
            (t (list :value-fn nil :static-value tp-props-expr)))))
        ;; Other string - treat as literal
@@ -1172,8 +1201,25 @@ Ignoring arguments: %S" widget-name args)))
                       (setq rendered-result 
                             (twidget--apply-event-properties rendered-result compiled-props))))))))
           ;; Apply :tp-props if specified
+          ;; Handle both static plists and dynamic method calls like "changeProps(tab)"
           (when tp-props-value
-            (setq rendered-result (twidget--apply-static-tp-props rendered-result tp-props-value)))
+            (if (stringp tp-props-value)
+                ;; String value - could be a method call like "changeProps(tab)"
+                ;; Parse it using local-bindings (which includes functions and loop vars)
+                (let* ((tp-props-info (twidget--parse-tp-props-value tp-props-value nil local-bindings))
+                       (value-fn (plist-get tp-props-info :value-fn))
+                       (static-value (plist-get tp-props-info :static-value)))
+                  (cond
+                   ;; Dynamic tp-props - call the function to get the props
+                   (value-fn
+                    (let ((props-plist (funcall value-fn)))
+                      (when props-plist
+                        (setq rendered-result (twidget--apply-static-tp-props rendered-result props-plist)))))
+                   ;; Static value - apply directly
+                   (static-value
+                    (setq rendered-result (twidget--apply-static-tp-props rendered-result static-value)))))
+              ;; Plist or other value - apply directly as static props
+              (setq rendered-result (twidget--apply-static-tp-props rendered-result tp-props-value))))
           rendered-result)))))
 
 (defun twidget--render-composite (setup-fn template props slot &optional compiled-render)
