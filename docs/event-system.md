@@ -63,6 +63,25 @@ Twidget 事件系统是一个类似 Vue3 的声明式事件处理系统，允许
   (twidget-insert '(toggle-switch)))
 ```
 
+### Hover 事件示例
+
+```elisp
+(define-twidget hover-demo
+  :setup (lambda (_props _slot)
+           (list :showTooltip (lambda ()
+                                (message "鼠标进入！"))
+                 :hideTooltip (lambda ()
+                                (message "鼠标离开！"))))
+  :template '(div
+              (span :on-mouse-enter "showTooltip"
+                    :on-mouse-leave "hideTooltip"
+                    "[Hover Me]")))
+
+(tp-pop-to-buffer "*hover-demo*"
+  (twidget-insert '(hover-demo))
+  (twidget-enable-hover-events))  ; 启用 cursor-sensor-mode
+```
+
 ## 架构设计
 
 ### 核心组件
@@ -108,13 +127,18 @@ Twidget 事件系统是一个类似 Vue3 的声明式事件处理系统，允许
   '((click . (:map-property keymap
               :event-trigger mouse-1
               :doc "点击事件"))
-    (mouse-enter . (:map-property keymap
-                    :event-trigger mouse-1
-                    :doc "鼠标进入事件"))
-    (mouse-leave . (:map-property keymap
-                    :event-trigger mouse-1
-                    :doc "鼠标离开事件"))))
+    (mouse-enter . (:map-property cursor-sensor-functions
+                    :event-trigger entered
+                    :doc "鼠标进入事件 (需要 cursor-sensor-mode)"))
+    (mouse-leave . (:map-property cursor-sensor-functions
+                    :event-trigger left
+                    :doc "鼠标离开事件 (需要 cursor-sensor-mode)"))
+    (hover . (:map-property cursor-sensor-functions
+              :event-trigger entered
+              :doc "hover 事件，mouse-enter 的别名"))))
 ```
+
+> **注意**: `mouse-enter`、`mouse-leave` 和 `hover` 事件需要在 buffer 中启用 `cursor-sensor-mode`。插入使用这些事件的组件后，调用 `(twidget-enable-hover-events)` 来启用。
 
 ### 表达式解析器
 
@@ -471,6 +495,25 @@ The Twidget event system is a Vue3-like declarative event handling system that a
 
 (tp-pop-to-buffer "*toggle-demo*"
   (twidget-insert '(toggle-switch)))
+```
+
+### Hover Event Example
+
+```elisp
+(define-twidget hover-demo
+  :setup (lambda (_props _slot)
+           (list :showTooltip (lambda ()
+                                (message "Mouse entered!"))
+                 :hideTooltip (lambda ()
+                                (message "Mouse left!"))))
+  :template '(div
+              (span :on-mouse-enter "showTooltip"
+                    :on-mouse-leave "hideTooltip"
+                    "[Hover Me]")))
+
+(tp-pop-to-buffer "*hover-demo*"
+  (twidget-insert '(hover-demo))
+  (twidget-enable-hover-events))  ; Enable cursor-sensor-mode
 ```
 
 ## Supported Expression Types

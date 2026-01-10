@@ -299,6 +299,34 @@
     (should (equal (plist-get result :type) 'multi-statement))
     (should (= (length (plist-get result :statements)) 2))))
 
+;;; Hover Event Tests
+;; ============================================================================
+
+(ert-deftest twidget-test-hover-event-recognized ()
+  "Test that hover event keywords are recognized."
+  (should (equal (twidget--is-event-prop-p :on-mouse-enter) 'mouse-enter))
+  (should (equal (twidget--is-event-prop-p :on-mouse-leave) 'mouse-leave))
+  (should (equal (twidget--is-event-prop-p :on-hover) 'hover)))
+
+(ert-deftest twidget-test-hover-handlers-created ()
+  "Test that hover handlers create cursor-sensor-functions."
+  (let ((handlers (twidget--create-hover-handlers (lambda () nil) nil)))
+    (should (plist-get handlers 'cursor-sensor-functions))
+    (should (listp (plist-get handlers 'cursor-sensor-functions)))))
+
+(ert-deftest twidget-test-process-mouse-enter-event ()
+  "Test processing mouse-enter event property."
+  (let ((result (twidget--process-event-prop 'mouse-enter "doSomething" nil)))
+    (should result)
+    (should (plist-get result 'cursor-sensor-functions))
+    (should (plist-get result 'rear-nonsticky))))
+
+(ert-deftest twidget-test-process-mouse-leave-event ()
+  "Test processing mouse-leave event property."
+  (let ((result (twidget--process-event-prop 'mouse-leave "doSomething" nil)))
+    (should result)
+    (should (plist-get result 'cursor-sensor-functions))))
+
 ;;; For Expression Parsing Tests
 ;; ============================================================================
 

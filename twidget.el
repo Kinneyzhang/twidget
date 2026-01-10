@@ -1872,6 +1872,13 @@ Example:
        (twidget-clear-buffer-state)
        (insert (twidget-parse ,form nil)))))
 
+(defun twidget-enable-hover-events ()
+  "Enable hover events (mouse-enter, mouse-leave) in the current buffer.
+This enables `cursor-sensor-mode' which is required for hover events.
+Call this after inserting widgets that use :on-mouse-enter or :on-mouse-leave."
+  (interactive)
+  (cursor-sensor-mode 1))
+
 ;;; Reactive Data System
 ;; ============================================================================
 
@@ -2273,17 +2280,24 @@ recomputed. Otherwise, the cached value is returned."
   '((click . (:map-property keymap
               :event-trigger mouse-1
               :doc "Triggered when element is clicked"))
-    (mouse-enter . (:map-property keymap
-                    :event-trigger mouse-1
-                    :doc "Triggered when mouse enters element"))
-    (mouse-leave . (:map-property keymap
-                    :event-trigger mouse-1
-                    :doc "Triggered when mouse leaves element")))
+    (mouse-enter . (:map-property cursor-sensor-functions
+                    :event-trigger entered
+                    :doc "Triggered when cursor enters element (requires cursor-sensor-mode)"))
+    (mouse-leave . (:map-property cursor-sensor-functions
+                    :event-trigger left
+                    :doc "Triggered when cursor leaves element (requires cursor-sensor-mode)"))
+    (hover . (:map-property cursor-sensor-functions
+              :event-trigger entered
+              :doc "Alias for mouse-enter (requires cursor-sensor-mode)")))
   "Registry of supported event types.
 Each entry is (EVENT-TYPE . PLIST) where PLIST contains:
   :map-property - The text property to use for the event map
   :event-trigger - The default event trigger
-  :doc - Documentation string")
+  :doc - Documentation string
+
+Note: mouse-enter, mouse-leave, and hover events require `cursor-sensor-mode'
+to be enabled in the buffer. Call `twidget-enable-hover-events' after inserting
+widgets that use these events.")
 
 (defvar-local twidget-event-context nil
   "Buffer-local variable holding the current event context.
@@ -3033,6 +3047,18 @@ Returns a keymap suitable for use as a text property."
     (define-key map (kbd "<return>") handler-fn)
     map))
 
+(defun twidget--create-hover-handlers (enter-fn leave-fn)
+  "Create cursor-sensor functions for hover events.
+ENTER-FN is called when cursor enters the region.
+LEAVE-FN is called when cursor leaves the region.
+Returns a plist of properties for cursor-sensor-mode."
+  (list 'cursor-sensor-functions
+        (list (lambda (window prev-pos action)
+                (ignore window prev-pos)
+                (pcase action
+                  ('entered (when enter-fn (funcall enter-fn)))
+                  ('left (when leave-fn (funcall leave-fn))))))))
+
 (defun twidget--process-event-prop (event-type handler-string bindings-plist &optional runtime-bindings)
   "Process an event property of type EVENT-TYPE with HANDLER-STRING.
 Uses BINDINGS-PLIST for variable and method resolution.
@@ -3046,6 +3072,14 @@ Returns a plist of text properties to apply."
        (list 'keymap (twidget--create-click-handler handler-fn)
              'rear-nonsticky '(keymap)
              'pointer 'hand))
+      ((or 'mouse-enter 'hover)
+       ;; Use cursor-sensor-mode for mouse-enter/hover events
+       (append (twidget--create-hover-handlers handler-fn nil)
+               (list 'rear-nonsticky '(cursor-sensor-functions))))
+      ('mouse-leave
+       ;; Use cursor-sensor-mode for mouse-leave events
+       (append (twidget--create-hover-handlers nil handler-fn)
+               (list 'rear-nonsticky '(cursor-sensor-functions))))
       (_ nil))))
 
 (defun twidget--apply-event-properties (text event-props)
