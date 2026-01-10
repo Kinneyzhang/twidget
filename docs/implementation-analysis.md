@@ -751,16 +751,18 @@ Buffer 文本:
 **问题2: 动态创建的符号无法回收** ✅ 已解决
 
 ```elisp
-;; 新实现使用 make-symbol (uninterned) 替代 intern
-(let ((sym (make-symbol (format "twidget--rtext-%d" text-id))))
-  (push sym twidget--uninterned-symbols)  ; 追踪以便清理
+;; 使用 interned symbols 配合 unintern 进行清理
+;; 注意: tp.el 需要通过名称查找符号，因此必须使用 interned symbols
+(let ((sym (intern (format "twidget--rtext-%d" text-id))))
+  (push sym twidget--interned-symbols)  ; 追踪以便清理
   (set sym text)
   ...)
 ```
 
 **解决方案**:
-1. ✅ 使用 uninterned symbols 代替 interned symbols，避免符号表膨胀
-2. ✅ 使用 `twidget--uninterned-symbols` 列表追踪符号，在清理时使用 `makunbound`
+1. ✅ 使用 `unintern` 在清理时移除符号，防止符号表膨胀
+2. ✅ 使用 `twidget--interned-symbols` 列表追踪符号，在清理时使用 `makunbound` + `unintern`
+3. 注意: 由于 tp.el 需要通过 `$symbol-name` 格式查找符号，必须使用 interned symbols
 
 ### 8.2 性能问题
 
@@ -1078,8 +1080,9 @@ See the Chinese section for a detailed analysis of the `checkbox` component, inc
    - Enhanced `twidget-clear-buffer-state` to clean up all symbols
 
 2. **Dynamically created symbols not garbage collected** ✅ RESOLVED
-   - Now uses `make-symbol` (uninterned) instead of `intern`
-   - Tracks symbols in `twidget--uninterned-symbols` for cleanup
+   - Uses `unintern` to remove symbols from obarray during cleanup
+   - Tracks symbols in `twidget--interned-symbols` for cleanup
+   - Note: tp.el requires interned symbols for `$symbol-name` lookup
 
 ### 8.2 Performance Issues
 

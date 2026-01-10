@@ -215,9 +215,10 @@ Examples:
          (t (warn "twidget--get-nested-value: Unknown accessor type: %S" accessor))))
       current)))
 
-(defvar-local twidget--uninterned-symbols nil
-  "Buffer-local list of uninterned symbols created for reactive text/props.
-Used for cleanup in `twidget-clear-buffer-state'.")
+(defvar-local twidget--interned-symbols nil
+  "Buffer-local list of interned symbols created for reactive text/props.
+Used for cleanup in `twidget-clear-buffer-state'.
+Note: We use interned symbols because tp.el requires symbol lookup by name.")
 
 (defun twidget--apply-reactive-text (text instance-id var-name &optional extra-props)
   "Apply reactive tracking to TEXT for INSTANCE-ID with VAR-NAME.
@@ -226,11 +227,11 @@ reactive layer (e.g., keymap, pointer, rear-nonsticky from parent event handlers
 These properties will be preserved when the reactive text is updated.
 Returns text with tp.el properties for reactive updates."
   ;; Create a unique reactive symbol for this specific text occurrence
-  ;; Using make-symbol (uninterned) instead of intern to avoid symbol table pollution
+  ;; Using interned symbols because tp.el requires symbol lookup by name via $prefix
   (let* ((text-id (cl-incf twidget-reactive-text-counter))
-         (sym (make-symbol (format "twidget--rtext-%d" text-id))))
-    ;; Track uninterned symbol for cleanup
-    (push sym twidget--uninterned-symbols)
+         (sym (intern (format "twidget--rtext-%d" text-id))))
+    ;; Track symbol for cleanup via unintern
+    (push sym twidget--interned-symbols)
     ;; Set the symbol value to just the reactive text (e.g., "0")
     (set sym text)
     ;; Register this symbol for updates when the var changes
@@ -241,10 +242,10 @@ Returns text with tp.el properties for reactive updates."
     ;; Use tp-set with the tp-text property type and the reactive symbol reference
     ;; Include extra-props (like keymap, pointer) so they are preserved during updates
     ;; extra-props must be a flat plist like (keymap map pointer hand rear-nonsticky (keymap))
-    ;; Note: For uninterned symbols, we pass the symbol directly (tp.el handles this)
+    ;; tp.el expects $symbol-name format for symbol reference
     (if extra-props
-        (apply #'tp-set text 'tp-text sym extra-props)
-      (tp-set text 'tp-text sym))))
+        (apply #'tp-set text 'tp-text (intern (format "$%s" sym)) extra-props)
+      (tp-set text 'tp-text (intern (format "$%s" sym))))))
 
 (defun twidget--apply-static-tp-props (text props-plist)
   "Apply static tp.el text properties from PROPS-PLIST to TEXT.
@@ -262,7 +263,7 @@ Returns text with tp.el properties for reactive updates.
 Uses tp-add to apply all properties at once with proper merging."
   ;; For reactive tp-props, we create symbols for each property value
   ;; and build a plist with symbol references, then apply with tp-add
-  ;; Using make-symbol (uninterned) instead of intern to avoid symbol table pollution
+  ;; Using interned symbols because tp.el requires symbol lookup by name via $prefix
   (let* ((prop-id (cl-incf twidget-reactive-prop-counter))
          (initial-props (funcall value-fn))
          (reactive-props nil))
@@ -271,9 +272,9 @@ Uses tp-add to apply all properties at once with proper merging."
       (while props
         (let* ((prop-name (car props))
                (prop-value (cadr props))
-               (sym (make-symbol (format "twidget--rprop-%d-%s" prop-id prop-name))))
-          ;; Track uninterned symbol for cleanup
-          (push sym twidget--uninterned-symbols)
+               (sym (intern (format "twidget--rprop-%d-%s" prop-id prop-name))))
+          ;; Track symbol for cleanup via unintern
+          (push sym twidget--interned-symbols)
           ;; Set the symbol value
           (set sym prop-value)
           ;; Register for updates
@@ -281,8 +282,9 @@ Uses tp-add to apply all properties at once with proper merging."
             (puthash key
                      (cons (list sym value-fn prop-name) (gethash key twidget-reactive-prop-symbols))
                      twidget-reactive-prop-symbols))
-          ;; Add to reactive props plist with symbol reference (use symbol directly)
-          (setq reactive-props (append reactive-props (list prop-name sym)))
+          ;; Add to reactive props plist with symbol reference ($prefix for tp.el)
+          (setq reactive-props (append reactive-props
+                                       (list prop-name (intern (format "$%s" sym)))))
           (setq props (cddr props)))))
     ;; Apply all properties at once with tp-add for proper merging
     (if reactive-props
@@ -1729,13 +1731,15 @@ Block elements are detected by the `twidget-block-element' text property."
 (defun twidget-clear-buffer-state ()
   "Clear all buffer-local widget state.
 This should be called before re-inserting widgets to ensure fresh state.
-Clears: widget instances, ref registry, reactive symbols, uninterned symbols, and counters."
+Clears: widget instances, ref registry, reactive symbols, interned symbols, and counters."
   (interactive)
-  ;; Clear uninterned symbols to allow garbage collection
-  (dolist (sym twidget--uninterned-symbols)
+  ;; Unintern symbols to allow garbage collection and prevent obarray pollution
+  (dolist (sym twidget--interned-symbols)
     (when (boundp sym)
-      (makunbound sym)))
-  (setq twidget--uninterned-symbols nil)
+      (makunbound sym))
+    ;; Unintern from obarray to prevent symbol table growth
+    (unintern (symbol-name sym)))
+  (setq twidget--interned-symbols nil)
   ;; Clear hash tables
   (clrhash twidget-instances)
   (clrhash twidget-ref-registry)
@@ -1771,13 +1775,14 @@ Calls the onUnmounted lifecycle hook if defined."
     ;; Remove found keys and clean up symbols
     (dolist (key keys-to-remove)
       (let ((symbols (gethash key twidget-reactive-symbols)))
-        ;; Unbind symbols to allow garbage collection
+        ;; Unintern symbols to prevent obarray pollution
         (dolist (sym symbols)
           (when (boundp sym)
             (makunbound sym))
-          ;; Remove from uninterned symbols list
-          (setq twidget--uninterned-symbols
-                (delq sym twidget--uninterned-symbols)))
+          (unintern (symbol-name sym))
+          ;; Remove from interned symbols list
+          (setq twidget--interned-symbols
+                (delq sym twidget--interned-symbols)))
         (remhash key twidget-reactive-symbols))))
   ;; Clean up reactive prop symbols
   (let ((keys-to-remove nil))
@@ -1792,8 +1797,9 @@ Calls the onUnmounted lifecycle hook if defined."
           (let ((sym (car entry)))
             (when (boundp sym)
               (makunbound sym))
-            (setq twidget--uninterned-symbols
-                  (delq sym twidget--uninterned-symbols))))
+            (unintern (symbol-name sym))
+            (setq twidget--interned-symbols
+                  (delq sym twidget--interned-symbols))))
         (remhash key twidget-reactive-prop-symbols))))
   ;; Clean up ref registry and secondary index
   (let ((keys-to-remove nil))
