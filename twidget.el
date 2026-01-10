@@ -69,6 +69,10 @@ every other element (starting from the first) is a keyword."
 ;;; Variables
 ;; ============================================================================
 
+(defvar twidget-debug-mode nil
+  "When non-nil, enable verbose debugging output for twidget operations.
+This includes detailed error messages, parsing information, and render traces.")
+
 (defvar twidget-alist nil
   "Alist of widget definitions: (WIDGET-NAME . DEFINITION).
 Each DEFINITION is a plist with :props, :slot, :render, :setup, :template,
@@ -98,6 +102,11 @@ Keys are instance IDs (strings), values are plists with:
 (defvar-local twidget-ref-registry (make-hash-table :test 'equal)
   "Buffer-local hash table for reactive ref tracking.
 Keys are (instance-id . var-name), values are the ref objects.")
+
+(defvar-local twidget-ref-by-name (make-hash-table :test 'equal)
+  "Buffer-local secondary index for O(1) lookup by variable name.
+Keys are var-name strings, values are lists of (instance-id . ref) pairs.
+This enables efficient lookup when the instance-id is not known.")
 
 (defvar-local twidget-reactive-symbols (make-hash-table :test 'equal)
   "Buffer-local hash table for reactive text symbol tracking.
@@ -134,7 +143,10 @@ When the value changes, the UI will be updated automatically."
   (let ((key (cons instance-id var-name)))
     (puthash key ref twidget-ref-registry)
     ;; Store the key in the ref for fast lookup during updates
-    (setf (twidget-ref-registry-key ref) key)))
+    (setf (twidget-ref-registry-key ref) key)
+    ;; Update secondary index for O(1) lookup by variable name
+    (let ((existing (gethash var-name twidget-ref-by-name)))
+      (puthash var-name (cons (cons instance-id ref) existing) twidget-ref-by-name))))
 
 (defvar-local twidget-reactive-text-counter 0
   "Counter for generating unique reactive text IDs.")
@@ -203,6 +215,10 @@ Examples:
          (t (warn "twidget--get-nested-value: Unknown accessor type: %S" accessor))))
       current)))
 
+(defvar-local twidget--uninterned-symbols nil
+  "Buffer-local list of uninterned symbols created for reactive text/props.
+Used for cleanup in `twidget-clear-buffer-state'.")
+
 (defun twidget--apply-reactive-text (text instance-id var-name &optional extra-props)
   "Apply reactive tracking to TEXT for INSTANCE-ID with VAR-NAME.
 EXTRA-PROPS is an optional plist of additional properties to include in the
@@ -210,8 +226,11 @@ reactive layer (e.g., keymap, pointer, rear-nonsticky from parent event handlers
 These properties will be preserved when the reactive text is updated.
 Returns text with tp.el properties for reactive updates."
   ;; Create a unique reactive symbol for this specific text occurrence
+  ;; Using make-symbol (uninterned) instead of intern to avoid symbol table pollution
   (let* ((text-id (cl-incf twidget-reactive-text-counter))
-         (sym (intern (format "twidget--rtext-%d" text-id))))
+         (sym (make-symbol (format "twidget--rtext-%d" text-id))))
+    ;; Track uninterned symbol for cleanup
+    (push sym twidget--uninterned-symbols)
     ;; Set the symbol value to just the reactive text (e.g., "0")
     (set sym text)
     ;; Register this symbol for updates when the var changes
@@ -222,9 +241,10 @@ Returns text with tp.el properties for reactive updates."
     ;; Use tp-set with the tp-text property type and the reactive symbol reference
     ;; Include extra-props (like keymap, pointer) so they are preserved during updates
     ;; extra-props must be a flat plist like (keymap map pointer hand rear-nonsticky (keymap))
+    ;; Note: For uninterned symbols, we pass the symbol directly (tp.el handles this)
     (if extra-props
-        (apply #'tp-set text 'tp-text (intern (format "$%s" sym)) extra-props)
-      (tp-set text 'tp-text (intern (format "$%s" sym))))))
+        (apply #'tp-set text 'tp-text sym extra-props)
+      (tp-set text 'tp-text sym))))
 
 (defun twidget--apply-static-tp-props (text props-plist)
   "Apply static tp.el text properties from PROPS-PLIST to TEXT.
@@ -242,6 +262,7 @@ Returns text with tp.el properties for reactive updates.
 Uses tp-add to apply all properties at once with proper merging."
   ;; For reactive tp-props, we create symbols for each property value
   ;; and build a plist with symbol references, then apply with tp-add
+  ;; Using make-symbol (uninterned) instead of intern to avoid symbol table pollution
   (let* ((prop-id (cl-incf twidget-reactive-prop-counter))
          (initial-props (funcall value-fn))
          (reactive-props nil))
@@ -250,7 +271,9 @@ Uses tp-add to apply all properties at once with proper merging."
       (while props
         (let* ((prop-name (car props))
                (prop-value (cadr props))
-               (sym (intern (format "twidget--rprop-%d-%s" prop-id prop-name))))
+               (sym (make-symbol (format "twidget--rprop-%d-%s" prop-id prop-name))))
+          ;; Track uninterned symbol for cleanup
+          (push sym twidget--uninterned-symbols)
           ;; Set the symbol value
           (set sym prop-value)
           ;; Register for updates
@@ -258,9 +281,8 @@ Uses tp-add to apply all properties at once with proper merging."
             (puthash key
                      (cons (list sym value-fn prop-name) (gethash key twidget-reactive-prop-symbols))
                      twidget-reactive-prop-symbols))
-          ;; Add to reactive props plist with symbol reference
-          (setq reactive-props (append reactive-props
-                                       (list prop-name (intern (format "$%s" sym)))))
+          ;; Add to reactive props plist with symbol reference (use symbol directly)
+          (setq reactive-props (append reactive-props (list prop-name sym)))
           (setq props (cddr props)))))
     ;; Apply all properties at once with tp-add for proper merging
     (if reactive-props
@@ -461,17 +483,21 @@ There are two ways to define a widget:
         (:render (setq render (cadr rest) rest (cddr rest)))
         (:setup (setq setup (cadr rest) rest (cddr rest)))
         (:template (setq template (cadr rest) rest (cddr rest)))
-        (_ (error "Unknown keyword %S in define-twidget" (car rest)))))
+        (_ (error "define-twidget `%s': Unknown keyword %S. Valid keywords: :props, :slot, :slots, :type, :extends, :render, :setup, :template"
+                  name (car rest)))))
     ;; Validate: either :render or (:setup and :template) must be provided
     ;; (unless :extends is used, which inherits from parent)
     (when (and render (or setup template))
-      (error "Cannot use both :render and :setup/:template in define-twidget"))
+      (error "define-twidget `%s': Cannot use both :render and :setup/:template. Use either :render for simple widgets or :setup/:template for composite widgets"
+             name))
     ;; XOR check: if one of setup/template is provided, both must be provided
     (when (not (eq (null setup) (null template)))
-      (error "Both :setup and :template must be provided together"))
+      (error "define-twidget `%s': Both :setup and :template must be provided together. Got :setup=%s :template=%s"
+             name (if setup "provided" "missing") (if template "provided" "missing")))
     ;; Ensure at least one rendering method is provided (unless extending)
     (when (and (not extends) (not render) (not (and setup template)))
-      (error "Widget must have :render or both :setup and :template (or use :extends)"))
+      (error "define-twidget `%s': Widget must have :render or both :setup and :template (or use :extends to inherit from a parent widget)"
+             name))
     ;; Prepare slot value - the sentinel :twidget--unspecified needs to be passed as-is
     ;; Other values (t, nil, or list) should evaluate properly
     (let ((slot-form (if (eq slot :twidget--unspecified)
@@ -1043,12 +1069,17 @@ Example:
 
 Returns the rendered string with text properties applied."
   (unless (and (listp widget-form) (symbolp (car widget-form)))
-    (error "Invalid widget form: must be a list starting with widget name"))
+    (error "twidget-parse: Invalid widget form: must be a list starting with widget name, got: %S" widget-form))
   (let* ((widget-name (car widget-form))
          (rest (cdr widget-form))
          (definition (cdr (assoc widget-name twidget-alist))))
     (unless definition
-      (error "Undefined widget: %S" widget-name))
+      (error "twidget-parse: Undefined widget `%s'. Available widgets: %s"
+             widget-name
+             (mapconcat (lambda (w) (symbol-name (car w)))
+                        twidget-alist ", ")))
+    (when twidget-debug-mode
+      (message "twidget-parse: Parsing widget `%s' with args: %S" widget-name rest))
     (let* ((prop-defs (plist-get definition :props))
            (slot-def (plist-get definition :slot))
            (extends (plist-get definition :extends))
@@ -1244,7 +1275,10 @@ COMPILED-RENDER is the pre-compiled render function (if available)."
   ;; Call setup function to get reactive bindings (pass both props and slot)
   (let* ((reactive-bindings (funcall setup-fn props slot))
          (instance-id (twidget--generate-instance-id))
-         (bindings nil))
+         (bindings nil)
+         ;; Extract lifecycle hooks from bindings
+         (on-mounted (plist-get reactive-bindings :onMounted))
+         (on-unmounted (plist-get reactive-bindings :onUnmounted)))
     ;; Process reactive bindings from setup
     ;; Convert reactive refs to bindings for template substitution
     (let ((plist reactive-bindings))
@@ -1261,14 +1295,21 @@ COMPILED-RENDER is the pre-compiled render function (if available)."
                 (twidget--register-ref instance-id var-name val))
               (push (cons var-name ref-value) bindings))))
         (setq plist (cddr plist))))
-    ;; Store instance info for reactivity
+    ;; Store instance info for reactivity, including lifecycle hooks
     (puthash instance-id
-             (list :bindings reactive-bindings :template template)
+             (list :bindings reactive-bindings
+                   :template template
+                   :onMounted on-mounted
+                   :onUnmounted on-unmounted)
              twidget-instances)
     ;; Use compiled render function if available, otherwise expand template
-    (if compiled-render
-        (funcall compiled-render bindings instance-id reactive-bindings)
-      (twidget--expand-template template bindings instance-id reactive-bindings))))
+    (let ((result (if compiled-render
+                      (funcall compiled-render bindings instance-id reactive-bindings)
+                    (twidget--expand-template template bindings instance-id reactive-bindings))))
+      ;; Call onMounted hook if provided (after rendering)
+      (when (functionp on-mounted)
+        (funcall on-mounted))
+      result)))
 
 (defun twidget--expand-template (template bindings instance-id &optional reactive-bindings)
   "Expand TEMPLATE sexp into rendered string.
@@ -1688,14 +1729,89 @@ Block elements are detected by the `twidget-block-element' text property."
 (defun twidget-clear-buffer-state ()
   "Clear all buffer-local widget state.
 This should be called before re-inserting widgets to ensure fresh state.
-Clears: widget instances, ref registry, reactive symbols, and counters."
+Clears: widget instances, ref registry, reactive symbols, uninterned symbols, and counters."
   (interactive)
+  ;; Clear uninterned symbols to allow garbage collection
+  (dolist (sym twidget--uninterned-symbols)
+    (when (boundp sym)
+      (makunbound sym)))
+  (setq twidget--uninterned-symbols nil)
+  ;; Clear hash tables
   (clrhash twidget-instances)
   (clrhash twidget-ref-registry)
+  (clrhash twidget-ref-by-name)  ; Clear secondary index
   (clrhash twidget-reactive-symbols)
   (clrhash twidget-reactive-prop-symbols)
+  ;; Reset counters
   (setq twidget-reactive-text-counter 0)
   (setq twidget-reactive-prop-counter 0))
+
+(defun twidget-unmount-instance (instance-id)
+  "Unmount and cleanup a specific widget instance INSTANCE-ID.
+Removes the instance from registries and cleans up associated symbols.
+This can be used to free memory when a widget is no longer needed.
+Calls the onUnmounted lifecycle hook if defined."
+  (interactive "sInstance ID: ")
+  ;; Call onUnmounted hook before cleanup
+  (let ((instance-info (gethash instance-id twidget-instances)))
+    (when instance-info
+      (let ((on-unmounted (plist-get instance-info :onUnmounted)))
+        (when (functionp on-unmounted)
+          (funcall on-unmounted)))))
+  ;; Remove from instances hash
+  (remhash instance-id twidget-instances)
+  ;; Clean up reactive symbols registered for this instance
+  (let ((keys-to-remove nil))
+    ;; Find all keys that start with this instance-id
+    (maphash (lambda (key _val)
+               (when (and (consp key)
+                          (equal (car key) instance-id))
+                 (push key keys-to-remove)))
+             twidget-reactive-symbols)
+    ;; Remove found keys and clean up symbols
+    (dolist (key keys-to-remove)
+      (let ((symbols (gethash key twidget-reactive-symbols)))
+        ;; Unbind symbols to allow garbage collection
+        (dolist (sym symbols)
+          (when (boundp sym)
+            (makunbound sym))
+          ;; Remove from uninterned symbols list
+          (setq twidget--uninterned-symbols
+                (delq sym twidget--uninterned-symbols)))
+        (remhash key twidget-reactive-symbols))))
+  ;; Clean up reactive prop symbols
+  (let ((keys-to-remove nil))
+    (maphash (lambda (key _val)
+               (when (and (consp key)
+                          (equal (car key) instance-id))
+                 (push key keys-to-remove)))
+             twidget-reactive-prop-symbols)
+    (dolist (key keys-to-remove)
+      (let ((entries (gethash key twidget-reactive-prop-symbols)))
+        (dolist (entry entries)
+          (let ((sym (car entry)))
+            (when (boundp sym)
+              (makunbound sym))
+            (setq twidget--uninterned-symbols
+                  (delq sym twidget--uninterned-symbols))))
+        (remhash key twidget-reactive-prop-symbols))))
+  ;; Clean up ref registry and secondary index
+  (let ((keys-to-remove nil))
+    (maphash (lambda (key _val)
+               (when (and (consp key)
+                          (equal (car key) instance-id))
+                 (push key keys-to-remove)))
+             twidget-ref-registry)
+    (dolist (key keys-to-remove)
+      ;; Also remove from secondary index
+      (let* ((var-name (cdr key))
+             (entries (gethash var-name twidget-ref-by-name)))
+        (puthash var-name
+                 (cl-remove-if (lambda (entry)
+                                 (equal (car entry) instance-id))
+                               entries)
+                 twidget-ref-by-name))
+      (remhash key twidget-ref-registry))))
 
 (defun twidget-extract-variables (form)
   "Extract variable names referenced in :for directives from FORM.
@@ -1771,31 +1887,30 @@ Examples:
   (twidget-get \\='user)           ; Get the whole value
   (twidget-get \\='user :name)     ; Get :name from plist
   (twidget-get \\='items 0)        ; Get first element from list"
-  (let ((key (if (symbolp var-name) (symbol-name var-name) var-name)))
-    ;; Search through the ref registry for refs with matching var-name
-    ;; This is more efficient than searching through all instances
+  (let* ((key (if (symbolp var-name) (symbol-name var-name) var-name))
+         ;; Use secondary index for O(1) lookup
+         (entries (gethash key twidget-ref-by-name)))
+    ;; Return the first matching ref's value
     (catch 'found
-      (maphash (lambda (registry-key ref)
-                 (when (and (consp registry-key)
-                            (string= (cdr registry-key) key)
-                            (twidget-ref-p ref))
-                   (let ((value (twidget-ref-value ref)))
-                     (throw 'found
-                            (cond
-                             ;; No key/index - return whole value
-                             ((null key-or-index) value)
-                             ;; Keyword access for plist
-                             ((keywordp key-or-index)
-                              (if (plistp value)
-                                  (plist-get value key-or-index)
-                                (error "Cannot use keyword access on non-plist value")))
-                             ;; Integer access for list
-                             ((integerp key-or-index)
-                              (if (listp value)
-                                  (nth key-or-index value)
-                                (error "Cannot use index access on non-list value")))
-                             (t (error "KEY-OR-INDEX must be a keyword or integer")))))))
-               twidget-ref-registry)
+      (dolist (entry entries)
+        (let ((ref (cdr entry)))
+          (when (twidget-ref-p ref)
+            (let ((value (twidget-ref-value ref)))
+              (throw 'found
+                     (cond
+                      ;; No key/index - return whole value
+                      ((null key-or-index) value)
+                      ;; Keyword access for plist
+                      ((keywordp key-or-index)
+                       (if (plistp value)
+                           (plist-get value key-or-index)
+                         (error "Cannot use keyword access on non-plist value")))
+                      ;; Integer access for list
+                      ((integerp key-or-index)
+                       (if (listp value)
+                           (nth key-or-index value)
+                         (error "Cannot use index access on non-list value")))
+                      (t (error "KEY-OR-INDEX must be a keyword or integer"))))))))
       nil)))
 
 (defun twidget-set (var-name value &optional key-or-index)
@@ -1810,49 +1925,48 @@ Examples:
   (twidget-set \\='user new-user)           ; Set the whole value
   (twidget-set \\='user \"John\" :name)      ; Set :name in plist
   (twidget-set \\='items \"new-item\" 0)     ; Set first element in list"
-  (let ((key (if (symbolp var-name) (symbol-name var-name) var-name)))
-    ;; Search through the ref registry for refs with matching var-name
-    ;; This is more efficient than searching through all instances
-    (maphash (lambda (registry-key ref)
-               (when (and (consp registry-key)
-                          (string= (cdr registry-key) key)
-                          (twidget-ref-p ref))
-                 (let ((inst-key (car registry-key)))
-                   ;; Capture old value before computing new value
-                   (let* ((old-value (twidget-ref-value ref))
-                          (new-value
-                           (cond
-                            ;; No key/index - set whole value
-                            ((null key-or-index) value)
-                            ;; Keyword access for plist
-                            ((keywordp key-or-index)
-                             (let ((current (twidget-ref-value ref)))
-                               (if (or (null current) (plistp current))
-                                   (plist-put (copy-sequence current) key-or-index value)
-                                 (error "Cannot use keyword access on non-plist value"))))
-                            ;; Integer access for list
-                            ((integerp key-or-index)
-                             (let ((current (twidget-ref-value ref)))
-                               (cond
-                                ((not (listp current))
-                                 (error "Cannot use index access on non-list value"))
-                                (t
-                                 (let ((len (length current)))
-                                   (if (or (< key-or-index 0) (>= key-or-index len))
-                                       (error "Index %d out of bounds for list of length %d"
-                                              key-or-index len)
-                                     (let ((new-list (copy-sequence current)))
-                                       (setf (nth key-or-index new-list) value)
-                                       new-list)))))))
-                            (t (error "KEY-OR-INDEX must be a keyword or integer")))))
-                     ;; Update the ref value
-                     (setf (twidget-ref-value ref) new-value)
-                     ;; Notify watchers with both new and old values
-                     (dolist (watcher (twidget-ref-watchers ref))
-                       (funcall watcher new-value old-value))
-                     ;; Trigger buffer update with accessor info for incremental updates
-                     (twidget--trigger-update inst-key key new-value key-or-index value)))))
-             twidget-ref-registry)))
+  (let* ((key (if (symbolp var-name) (symbol-name var-name) var-name))
+         ;; Use secondary index for O(1) lookup
+         (entries (gethash key twidget-ref-by-name)))
+    ;; Update all refs with matching var-name
+    (dolist (entry entries)
+      (let ((inst-key (car entry))
+            (ref (cdr entry)))
+        (when (twidget-ref-p ref)
+          ;; Capture old value before computing new value
+          (let* ((old-value (twidget-ref-value ref))
+                 (new-value
+                  (cond
+                   ;; No key/index - set whole value
+                   ((null key-or-index) value)
+                   ;; Keyword access for plist
+                   ((keywordp key-or-index)
+                    (let ((current (twidget-ref-value ref)))
+                      (if (or (null current) (plistp current))
+                          (plist-put (copy-sequence current) key-or-index value)
+                        (error "Cannot use keyword access on non-plist value"))))
+                   ;; Integer access for list
+                   ((integerp key-or-index)
+                    (let ((current (twidget-ref-value ref)))
+                      (cond
+                       ((not (listp current))
+                        (error "Cannot use index access on non-list value"))
+                       (t
+                        (let ((len (length current)))
+                          (if (or (< key-or-index 0) (>= key-or-index len))
+                              (error "Index %d out of bounds for list of length %d"
+                                     key-or-index len)
+                            (let ((new-list (copy-sequence current)))
+                              (setf (nth key-or-index new-list) value)
+                              new-list)))))))
+                   (t (error "KEY-OR-INDEX must be a keyword or integer")))))
+            ;; Update the ref value
+            (setf (twidget-ref-value ref) new-value)
+            ;; Notify watchers with both new and old values
+            (dolist (watcher (twidget-ref-watchers ref))
+              (funcall watcher new-value old-value))
+            ;; Trigger buffer update with accessor info for incremental updates
+            (twidget--trigger-update inst-key key new-value key-or-index value)))))))
 
 (defun twidget--trigger-update (instance-id var-name value &optional accessor sub-value)
   "Trigger a reactive update for INSTANCE-ID when VAR-NAME changes to VALUE.
@@ -2008,15 +2122,15 @@ SYM is a symbol. The value can be a string or number."
   "Create or get a reactive variable named VAR-NAME.
 If INITIAL-VALUE is provided, create a new reactive variable.
 Returns the twidget-ref object."
-  (let ((key (if (symbolp var-name) (symbol-name var-name) var-name)))
-    ;; Look for existing ref in the registry (more efficient than searching instances)
+  (let* ((key (if (symbolp var-name) (symbol-name var-name) var-name))
+         ;; Use secondary index for O(1) lookup
+         (entries (gethash key twidget-ref-by-name)))
+    ;; Look for existing ref in the registry
     (catch 'found
-      (maphash (lambda (registry-key ref)
-                 (when (and (consp registry-key)
-                            (string= (cdr registry-key) key)
-                            (twidget-ref-p ref))
-                   (throw 'found ref)))
-               twidget-ref-registry)
+      (dolist (entry entries)
+        (let ((ref (cdr entry)))
+          (when (twidget-ref-p ref)
+            (throw 'found ref))))
       ;; Not found, create a new one if initial value provided
       (when initial-value
         (twidget-ref initial-value)))))
@@ -2075,6 +2189,82 @@ Returns the REF."
   (setf (twidget-ref-watchers ref)
         (delq callback (twidget-ref-watchers ref)))
   ref)
+
+;;; Computed Properties
+;; ============================================================================
+
+(cl-defstruct (twidget-computed (:constructor twidget-computed--create))
+  "A computed property that caches its value and recomputes when dependencies change."
+  getter      ; Function to compute the value
+  value       ; Cached value
+  dirty       ; Whether the value needs recomputation
+  deps        ; List of dependency refs
+  watchers)   ; Watcher callbacks registered on dependencies
+
+(defun twidget-computed (getter &rest deps)
+  "Create a computed property with GETTER function and dependency DEPS.
+GETTER is a function that computes the value.
+DEPS is a list of twidget-ref objects that the computed depends on.
+
+The computed value is cached and only recomputed when one of the
+dependencies changes. This is similar to Vue's computed properties.
+
+Example usage in :setup:
+
+  :setup (lambda (_props _slot)
+           (let* ((first-name (twidget-ref \"John\"))
+                  (last-name (twidget-ref \"Doe\"))
+                  (full-name (twidget-computed
+                              (lambda ()
+                                (format \"%s %s\"
+                                        (twidget-ref-value first-name)
+                                        (twidget-ref-value last-name)))
+                              first-name last-name)))
+             (list :firstName first-name
+                   :lastName last-name
+                   :fullName full-name)))
+
+Returns a twidget-computed object that can be accessed with
+`twidget-computed-get'."
+  (unless (functionp getter)
+    (error "twidget-computed: GETTER must be a function"))
+  (let* ((computed (twidget-computed--create
+                    :getter getter
+                    :value nil
+                    :dirty t
+                    :deps deps
+                    :watchers nil))
+         ;; Create a watcher callback that marks computed as dirty
+         (invalidate-fn (lambda (_new _old)
+                          (setf (twidget-computed-dirty computed) t))))
+    ;; Watch all dependencies
+    (dolist (dep deps)
+      (when (twidget-ref-p dep)
+        (twidget-watch dep invalidate-fn)
+        (push invalidate-fn (twidget-computed-watchers computed))))
+    ;; Compute initial value
+    (setf (twidget-computed-value computed) (funcall getter))
+    (setf (twidget-computed-dirty computed) nil)
+    computed))
+
+(defun twidget-computed-get (computed)
+  "Get the value of COMPUTED property, recomputing if necessary.
+COMPUTED must be a twidget-computed object created by `twidget-computed'.
+
+If any dependency has changed since the last access, the value will be
+recomputed. Otherwise, the cached value is returned."
+  (unless (twidget-computed-p computed)
+    (error "twidget-computed-get: COMPUTED must be a twidget-computed object"))
+  (when (twidget-computed-dirty computed)
+    ;; Recompute the value
+    (setf (twidget-computed-value computed)
+          (funcall (twidget-computed-getter computed)))
+    (setf (twidget-computed-dirty computed) nil))
+  (twidget-computed-value computed))
+
+(defun twidget-computed-p (obj)
+  "Return non-nil if OBJ is a twidget-computed object."
+  (cl-typep obj 'twidget-computed))
 
 ;;; Event System
 ;; ============================================================================
