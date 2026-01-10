@@ -32,7 +32,11 @@
 ;; - Property system with required/optional properties and defaults
 ;; - Slot system for flexible content composition
 ;; - Widget inheritance for creating specialized variants
-;; - Seamless integration with Emacs text properties
+;; - Reactive data binding with automatic UI updates
+;; - Computed properties with dependency tracking
+;; - Lifecycle hooks (onMounted, onUnmounted)
+;; - Event system with click and hover support
+;; - Seamless integration with Emacs text properties via tp.el
 ;;
 ;; Quick Example:
 ;;
@@ -45,6 +49,19 @@
 ;;   (twidget-parse '(my-button "Hello"))
 ;;
 ;; See README.md for more examples and documentation.
+;;
+;; Module Organization (Table of Contents):
+;; =========================================
+;; 1. Configuration & Variables      - Global and buffer-local state
+;; 2. Core Data Structures           - twidget-ref, twidget-computed
+;; 3. Reactive System                - Refs, symbols, updates, watchers
+;; 4. Widget Definition              - define-twidget macro
+;; 5. Template Compilation           - Vue-style template to code
+;; 6. Property & Slot Helpers        - Parsing and validation
+;; 7. Widget Rendering               - Core rendering engine
+;; 8. Event System                   - Click, hover, expression parsing
+;; 9. Public API                     - User-facing functions
+;; 10. Built-in Widgets              - Loaded from twidget-builtin.el
 
 ;;; Code:
 
@@ -66,8 +83,10 @@ every other element (starting from the first) is a keyword."
                (setq valid nil)))
            (and valid (null lst))))))
 
-;;; Variables
-;; ============================================================================
+;;;============================================================================
+;;; SECTION 1: Configuration & Variables
+;;;============================================================================
+;; Global and buffer-local state for twidget operations.
 
 (defvar twidget-debug-mode nil
   "When non-nil, enable verbose debugging output for twidget operations.
@@ -115,8 +134,10 @@ Keys are (instance-id . var-name), values are lists of symbols to update.")
 (defvar twidget--instance-counter 0
   "Counter for generating unique instance IDs.")
 
-;;; Reactive Reference (twidget-ref)
-;; ============================================================================
+;;;============================================================================
+;;; SECTION 2: Core Data Structures
+;;;============================================================================
+;; Fundamental data types: twidget-ref (reactive reference)
 
 (cl-defstruct (twidget-ref (:constructor twidget-ref--create))
   "A reactive reference that triggers updates when its value changes."
@@ -388,8 +409,10 @@ Returns a plist with:
    ;; Other types (numbers, symbols, etc.) - treat as static values
    (t (list :value-fn nil :static-value tp-props-expr))))
 
-;;; Widget Definition
-;; ============================================================================
+;;;============================================================================
+;;; SECTION 3: Widget Definition
+;;;============================================================================
+;; The define-twidget macro and widget registration system.
 
 (defmacro define-twidget (name &rest args)
   "Define a text widget (widget) named NAME.
@@ -510,8 +533,9 @@ There are two ways to define a widget:
                        type)))
       `(twidget-internal ',name ,props ,slot-form ,type-form ,extends ,render ,setup ,template))))
 
-;;; Template Compilation (Render Function Generation)
-;; ============================================================================
+;;;============================================================================
+;;; SECTION 4: Template Compilation (Render Function Generation)
+;;;============================================================================
 ;;
 ;; This module implements Vue 3-style template compilation. At component
 ;; definition time, the :template sexp is compiled into an executable Elisp
@@ -673,8 +697,7 @@ Returns non-nil if the condition is truthy."
      ((string= trimmed "nil") nil)
      (t trimmed))))
 
-;;; Template Compilation Entry Points
-;; ============================================================================
+;; -- Template Compilation Entry Points --
 
 (defun twidget--compile-template-to-render-fn (template)
   "Compile TEMPLATE into an executable render function.
@@ -896,8 +919,12 @@ TEMPLATE is a template sexp (for composite widgets)."
           (push (cons name definition) twidget-alist)))
       (assoc name twidget-alist))))
 
-;;; Property Helpers
-;; ============================================================================
+;;;============================================================================
+;;; SECTION 5: Property, Type & Slot Helpers
+;;;============================================================================
+;; Parsing and validation helpers for widget properties, types, and slots.
+
+;; -- Property Helpers --
 
 (defun twidget-props (parent-props child-props)
   "Merge PARENT-PROPS with CHILD-PROPS.
@@ -943,8 +970,7 @@ Returns nil if no default is specified."
   "Return non-nil if PROP-DEF has a default value."
   (consp prop-def))
 
-;;; Type Helpers
-;; ============================================================================
+;; -- Type Helpers --
 
 (defun twidget-get-widget-type (widget-name)
   "Get the display type of widget WIDGET-NAME.
@@ -1002,8 +1028,7 @@ FORM should be a widget form like (widget-name ...)."
        (assoc (car form) twidget-alist)
        (eq (twidget-get-widget-type (car form)) 'block)))
 
-;;; Slot Helpers
-;; ============================================================================
+;; -- Slot Helpers --
 
 (defun twidget-slot-is-named-p (slot-def)
   "Return non-nil if SLOT-DEF defines named slots (a list of symbols)."
@@ -1026,8 +1051,10 @@ Returns the slot name as a symbol (e.g., \\='header)."
   (let ((name (symbol-name (car slot-sexp))))
     (intern (substring name 5))))
 
-;;; Widget Parsing
-;; ============================================================================
+;;;============================================================================
+;;; SECTION 6: Widget Rendering Engine
+;;;============================================================================
+;; Core parsing and rendering functions for widgets.
 
 (cl-defun twidget-parse (widget-form &optional bindings instance-id)
   "Parse and render a widget invocation.
@@ -1885,8 +1912,10 @@ Call this after inserting widgets that use :on-mouse-enter or :on-mouse-leave."
   (interactive)
   (cursor-sensor-mode 1))
 
-;;; Reactive Data System
-;; ============================================================================
+;;;============================================================================
+;;; SECTION 7: Reactive Data System (Public API)
+;;;============================================================================
+;; User-facing functions for working with reactive data: get, set, inc, dec, watch.
 
 (defun twidget-get (var-name &optional key-or-index)
   "Get the value of reactive data variable VAR-NAME.
@@ -2082,8 +2111,7 @@ Returns a cons cell (LOOP-VAR . COLLECTION-NAME) or nil if invalid."
     (cons (match-string 1 for-expr)
           (match-string 2 for-expr))))
 
-;;; Utilities
-;; ============================================================================
+;; -- Ref Utility Functions --
 
 (defun twidget-ref-set (ref value)
   "Set the value of reactive REF to VALUE and trigger UI updates.
@@ -2203,8 +2231,10 @@ Returns the REF."
         (delq callback (twidget-ref-watchers ref)))
   ref)
 
-;;; Computed Properties
-;; ============================================================================
+;;;============================================================================
+;;; SECTION 8: Computed Properties
+;;;============================================================================
+;; Vue-style computed properties with dependency tracking and caching.
 
 (cl-defstruct (twidget-computed (:constructor twidget-computed--create))
   "A computed property that caches its value and recomputes when dependencies change."
@@ -2279,8 +2309,10 @@ recomputed. Otherwise, the cached value is returned."
   "Return non-nil if OBJ is a twidget-computed object."
   (cl-typep obj 'twidget-computed))
 
-;;; Event System
-;; ============================================================================
+;;;============================================================================
+;;; SECTION 9: Event System
+;;;============================================================================
+;; Event handling: expression parsing, click/hover handlers, event compilation.
 
 (defvar twidget-event-types
   '((click . (:map-property keymap
@@ -3094,6 +3126,11 @@ Returns the TEXT with properties applied."
   (if event-props
       (apply #'propertize text event-props)
     text))
+
+;;;============================================================================
+;;; SECTION 10: Built-in Widgets & Buffer Aliases
+;;;============================================================================
+;; Load built-in widget definitions and provide buffer utility functions.
 
 (require 'twidget-builtin)
 
