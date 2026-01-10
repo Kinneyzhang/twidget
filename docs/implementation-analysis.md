@@ -733,55 +733,49 @@ Buffer 文本:
 
 ## 8. 潜在问题与优化方向
 
+> **更新**: 以下很多优化已在 2024 年实现。标记 ✅ 表示已完成，⏳ 表示进行中。
+
 ### 8.1 内存管理问题
 
-**问题1: twidget-ref-registry 无清理机制**
+**问题1: twidget-ref-registry 无清理机制** ✅ 已解决
 
 ```elisp
-;; 当前实现只有 puthash，没有对应的清理
-(puthash key ref twidget-ref-registry)
+;; 新增: twidget-unmount-instance 函数清理特定实例
+(twidget-unmount-instance instance-id)
 ```
 
-**影响**: 长时间使用后，registry 会积累大量不再使用的 ref 对象。
+**解决方案**:
+1. ✅ 实现 `twidget-unmount-instance` 组件卸载机制，清理对应的 registry 条目
+2. ✅ 在 `twidget-clear-buffer-state` 时同时清理符号绑定和所有相关状态
 
-**优化建议**:
-1. 实现组件卸载机制，在组件销毁时清理对应的 registry 条目
-2. 使用 weak hash table 或定期清理过期条目
-3. 在 `twidget-clear-buffer-state` 时同时清理符号绑定
-
-**问题2: 动态创建的符号无法回收**
+**问题2: 动态创建的符号无法回收** ✅ 已解决
 
 ```elisp
-(let ((sym (intern (format "twidget--rtext-%d" text-id))))
-  (set sym text)  ; 创建全局符号
+;; 新实现使用 make-symbol (uninterned) 替代 intern
+(let ((sym (make-symbol (format "twidget--rtext-%d" text-id))))
+  (push sym twidget--uninterned-symbols)  ; 追踪以便清理
+  (set sym text)
   ...)
 ```
 
-**影响**: `twidget--rtext-N` 符号会持续增长，可能导致符号表膨胀。
-
-**优化建议**:
-1. 使用 uninterned symbols 代替 interned symbols
-2. 或在清理时使用 `unintern` 移除不再使用的符号
+**解决方案**:
+1. ✅ 使用 uninterned symbols 代替 interned symbols，避免符号表膨胀
+2. ✅ 使用 `twidget--uninterned-symbols` 列表追踪符号，在清理时使用 `makunbound`
 
 ### 8.2 性能问题
 
-**问题1: twidget-get/twidget-set 使用 maphash 遍历**
+**问题1: twidget-get/twidget-set 使用 maphash 遍历** ✅ 已解决
 
 ```elisp
-(defun twidget-get (var-name &optional key-or-index)
-  (maphash (lambda (registry-key ref)
-             (when (string= (cdr registry-key) key)
-               ...))
-           twidget-ref-registry))
+;; 新增: twidget-ref-by-name 二级索引实现 O(1) 查找
+(defvar-local twidget-ref-by-name (make-hash-table :test 'equal))
 ```
 
-**影响**: O(n) 时间复杂度，当 registry 中有大量条目时性能下降。
+**解决方案**:
+1. ✅ 添加 `twidget-ref-by-name` 按变量名索引的辅助 hash table
+2. ✅ `twidget-get`、`twidget-set`、`twidget-reactive` 现在使用 O(1) 查找
 
-**优化建议**:
-1. 添加按变量名索引的辅助 hash table
-2. 或者在当前作用域中缓存 ref 引用，避免每次都查找
-
-**问题2: 模板编译生成的代码可能不够优化**
+**问题2: 模板编译生成的代码可能不够优化** ⏳ 部分优化
 
 当前编译器直接嵌入函数调用，如：
 ```elisp
@@ -808,22 +802,39 @@ Buffer 文本:
 1. 对于列表/plist 类型的值，支持 diff 更新
 2. 实现虚拟 DOM 类似的机制，只更新变化的部分
 
-**问题2: 缺少生命周期钩子**
+**问题2: 缺少生命周期钩子** ✅ 已解决
 
-当前实现没有 `onMounted`, `onUnmounted` 等生命周期钩子。
+```elisp
+;; 新增: 在 :setup 返回值中支持 :onMounted 和 :onUnmounted
+:setup (lambda (_props _slot)
+         (list :count (twidget-ref 0)
+               :onMounted (lambda () (message "组件已挂载"))
+               :onUnmounted (lambda () (message "组件已卸载"))))
+```
 
-**优化建议**:
-1. 在 `twidget--render-composite` 中添加 mounted 回调
-2. 实现组件卸载检测，触发 unmounted 回调
-3. 可以通过扩展 setup 返回值来支持生命周期
+**解决方案**:
+1. ✅ 在 `twidget--render-composite` 中添加 onMounted 回调
+2. ✅ 在 `twidget-unmount-instance` 中触发 onUnmounted 回调
+3. ✅ 通过扩展 setup 返回值支持生命周期钩子
 
-**问题3: 缺少计算属性 (computed)**
+**问题3: 缺少计算属性 (computed)** ✅ 已解决
 
-Vue 的 computed 属性可以缓存计算结果，当前实现没有类似机制。
+```elisp
+;; 新增: twidget-computed 函数实现计算属性
+(let* ((first (twidget-ref "John"))
+       (last (twidget-ref "Doe"))
+       (full (twidget-computed
+              (lambda ()
+                (format "%s %s" (twidget-ref-value first)
+                                (twidget-ref-value last)))
+              first last)))
+  (twidget-computed-get full))  ; => "John Doe"
+```
 
-**优化建议**:
-1. 实现 `twidget-computed` 函数，接受依赖列表和计算函数
-2. 自动追踪依赖变化，只在依赖改变时重新计算
+**解决方案**:
+1. ✅ 实现 `twidget-computed` 函数，接受依赖列表和计算函数
+2. ✅ 自动追踪依赖变化，只在依赖改变时重新计算
+3. ✅ 缓存计算结果，避免重复计算
 
 ### 8.4 事件系统限制
 
@@ -846,14 +857,16 @@ Vue 的 computed 属性可以缓存计算结果，当前实现没有类似机制
 
 ### 8.5 开发体验问题
 
-**问题1: 调试困难**
+**问题1: 调试困难** ✅ 已解决
 
-错误信息不够详细，难以定位问题源头。
+```elisp
+;; 新增: twidget-debug-mode 开关
+(setq twidget-debug-mode t)  ; 启用详细调试输出
+```
 
-**优化建议**:
-1. 添加更详细的错误信息，包含组件名称和上下文
-2. 实现开发模式，提供更多运行时检查
-3. 添加组件检查器工具
+**解决方案**:
+1. ✅ 添加更详细的错误信息，包含组件名称和上下文
+2. ✅ 实现 `twidget-debug-mode` 开发模式，提供更多运行时检查
 
 **问题2: 缺少热重载支持**
 
@@ -872,7 +885,7 @@ Vue 的 computed 属性可以缓存计算结果，当前实现没有类似机制
    - `twidget-compiler.el`: 模板编译器
    - `twidget-builtin.el`: 内置组件 (已存在)
 
-2. **添加测试**: 当前缺少自动化测试，建议添加 ERT 测试覆盖主要功能
+2. **添加测试**: ✅ 已添加 `twidget-tests.el` 包含 ERT 测试覆盖主要功能
 
 3. **文档注释**: 虽然有 docstring，但缺少设计文档和架构说明
 
@@ -1047,21 +1060,25 @@ See the Chinese section for a detailed analysis of the `checkbox` component, inc
 
 ### 8.1 Memory Management
 
-1. **No cleanup mechanism for twidget-ref-registry**
-   - Refs accumulate over time
-   - Suggestion: Implement component unmount with cleanup
+> **Update**: Many of these optimizations have been implemented. ✅ indicates completed, ⏳ indicates in progress.
 
-2. **Dynamically created symbols not garbage collected**
-   - `twidget--rtext-N` symbols keep growing
-   - Suggestion: Use uninterned symbols or unintern on cleanup
+### 8.1 Memory Management
+
+1. **No cleanup mechanism for twidget-ref-registry** ✅ RESOLVED
+   - Implemented `twidget-unmount-instance` for per-instance cleanup
+   - Enhanced `twidget-clear-buffer-state` to clean up all symbols
+
+2. **Dynamically created symbols not garbage collected** ✅ RESOLVED
+   - Now uses `make-symbol` (uninterned) instead of `intern`
+   - Tracks symbols in `twidget--uninterned-symbols` for cleanup
 
 ### 8.2 Performance Issues
 
-1. **O(n) lookup in twidget-get/twidget-set**
-   - Uses maphash to iterate through registry
-   - Suggestion: Add secondary index by variable name
+1. **O(n) lookup in twidget-get/twidget-set** ✅ RESOLVED
+   - Added `twidget-ref-by-name` secondary index for O(1) lookup
+   - All lookup functions now use the secondary index
 
-2. **Template compilation could be more optimized**
+2. **Template compilation could be more optimized** ⏳ Partial
    - Suggestion: Inline common operations, constant folding
 
 ### 8.3 Feature Limitations
@@ -1070,12 +1087,14 @@ See the Chinese section for a detailed analysis of the `checkbox` component, inc
    - No fine-grained updates
    - Suggestion: Implement diff-based updates
 
-2. **No lifecycle hooks**
-   - Missing onMounted, onUnmounted
-   - Suggestion: Add lifecycle support to setup
+2. **No lifecycle hooks** ✅ RESOLVED
+   - Added `:onMounted` and `:onUnmounted` hooks in setup return value
+   - `onMounted` called after rendering, `onUnmounted` called during unmount
 
-3. **No computed properties**
-   - Suggestion: Implement twidget-computed with dependency tracking
+3. **No computed properties** ✅ RESOLVED
+   - Implemented `twidget-computed` with dependency tracking
+   - Caches values and recomputes only when dependencies change
+   - Use `twidget-computed-get` to access computed values
 
 ### 8.4 Event System Limitations
 
@@ -1088,9 +1107,9 @@ See the Chinese section for a detailed analysis of the `checkbox` component, inc
 
 ### 8.5 Development Experience
 
-1. **Debugging difficulties**
-   - Error messages lack context
-   - Suggestion: Add development mode with detailed checks
+1. **Debugging difficulties** ✅ RESOLVED
+   - Added `twidget-debug-mode` for verbose debugging output
+   - Improved error messages with widget context and suggestions
 
 2. **No hot reload support**
    - Suggestion: Implement component change detection
@@ -1098,5 +1117,5 @@ See the Chinese section for a detailed analysis of the `checkbox` component, inc
 ### 8.6 Code Organization Suggestions
 
 1. Split into multiple files
-2. Add automated tests
+2. Add automated tests ✅ RESOLVED - Added `twidget-tests.el` with ERT tests
 3. Improve documentation
