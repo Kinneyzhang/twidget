@@ -838,14 +838,23 @@ Buffer 文本:
 
 ### 8.4 事件系统限制
 
-**问题1: 只支持 click 事件**
+**问题1: 只支持 click 事件** ✅ 已解决
 
-虽然 `twidget-event-types` 定义了 mouse-enter/mouse-leave，但实际只有 click 被实现。
+```elisp
+;; 新增: hover 事件支持
+(span :on-mouse-enter "showTooltip"
+      :on-mouse-leave "hideTooltip"
+      "[Hover Me]")
 
-**优化建议**:
-1. 实现 hover 事件支持（使用 `cursor-sensor-mode`）
-2. 支持键盘事件
-3. 支持自定义事件
+;; 注意: 需要在 buffer 中启用 cursor-sensor-mode
+(twidget-enable-hover-events)
+```
+
+**解决方案**:
+1. ✅ 实现 hover 事件支持（使用 `cursor-sensor-mode`）
+2. ✅ 支持 `:on-mouse-enter`、`:on-mouse-leave`、`:on-hover` 事件
+3. 待实现: 支持键盘事件
+4. 待实现: 支持自定义事件
 
 **问题2: 事件冒泡/捕获不支持**
 
@@ -1098,9 +1107,10 @@ See the Chinese section for a detailed analysis of the `checkbox` component, inc
 
 ### 8.4 Event System Limitations
 
-1. **Only click event implemented**
-   - mouse-enter/leave defined but not implemented
-   - Suggestion: Implement hover, keyboard events
+1. **Only click event implemented** ✅ RESOLVED
+   - Implemented hover events using `cursor-sensor-mode`
+   - Supports `:on-mouse-enter`, `:on-mouse-leave`, `:on-hover`
+   - Call `twidget-enable-hover-events` to enable cursor-sensor-mode
 
 2. **No event bubbling/capturing**
    - Suggestion: Implement event propagation
